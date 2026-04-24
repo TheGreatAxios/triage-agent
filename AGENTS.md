@@ -113,7 +113,7 @@ Linear Integration (set via `wrangler secret put`):
 - `LINEAR_API_KEY` — Linear personal API key (Settings → API)
 - `LINEAR_TEAM_ID` — Team UUID where issues are created
 - `LINEAR_TRIAGE_STATE_ID` — Workflow state UUID for triage/backlog
-- `LINEAR_PROJECT_ID` — (Optional) Project UUID to assign issues to
+- `LINEAR_PROJECT_ID` — (Optional) **Leave unset** to avoid GitHub sync. If set, issues are assigned to this Linear project; if that project has GitHub sync enabled, triage issues will appear as public GitHub issues.
 - `LINEAR_LABEL_BUG` — (Optional) Label UUID for bug classifications
 - `LINEAR_LABEL_REQUEST` — (Optional) Label UUID for feature request classifications
 
