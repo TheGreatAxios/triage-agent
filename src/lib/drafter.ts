@@ -99,6 +99,12 @@ async function generateDraftContent(env: Env, context: string): Promise<string> 
       system: DRAFT_PROMPT,
       prompt: `Here is the conversation context:\n\n${context}\n\nGenerate a helpful response:`,
       maxOutputTokens: 200,
+      providerOptions: {
+        openai: {
+          reasoningEffort: "none",  // No reasoning tokens for nano
+          serviceTier: "flex",      // 50% cost savings
+        },
+      },
     });
 
     return text.trim();

@@ -128,14 +128,8 @@ function isLikelyNormal(text: string): boolean {
   return normalPatterns.some((p) => p.test(trimmed));
 }
 
-const CLASSIFICATION_PROMPT = `Classify this Telegram message into exactly one category.
-
-Categories:
-- bug: Reports of errors, crashes, broken functionality, things not working
-- request: Feature requests, enhancement suggestions, asking for new capabilities
-- normal: General conversation, greetings, acknowledgments, questions, discussion
-
-Respond with ONLY a JSON object: {"label":"bug"|"request"|"normal","confidence":0.0-1.0,"reasoning":"brief explanation"}`;
+const CLASSIFICATION_PROMPT = `Classify:bug/request/normal.
+Reply:JSON{"label":"X","confidence":0.X}`;
 
 /**
  * Full classification pipeline: rules first, model fallback if ambiguous.
@@ -172,7 +166,13 @@ async function classifyByModel(
       model,
       system: CLASSIFICATION_PROMPT,
       prompt: event.text,
-      maxOutputTokens: 100,
+      maxOutputTokens: 50,  // Tiny output: {"label":"bug","confidence":0.9}
+      providerOptions: {
+        openai: {
+          reasoningEffort: "none",  // No reasoning tokens for nano
+          serviceTier: "flex",      // 50% cost savings
+        },
+      },
     });
 
     const parsed = parseModelResponse(text);

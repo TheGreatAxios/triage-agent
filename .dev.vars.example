@@ -1,8 +1,47 @@
+# Required Telegram Settings
 TELEGRAM_BOT_TOKEN=your-bot-token
 TELEGRAM_WEBHOOK_SECRET=your-webhook-secret
+
+# Required Slack
 SLACK_WEBHOOK_URL=https://hooks.slack.com/services/xxx/yyy/zzz
-LINEAR_API_KEY=your-linear-api-key
-# Optional: set to route AI tasks to alternative providers
-NVIDIA_API_KEY=your-nvidia-nim-key
-OPENAI_API_KEY=your-openai-key
-OPENROUTER_API_KEY=your-openrouter-key
+
+# Linear Integration (required for triage issue creation)
+LINEAR_API_KEY=lin_api_xxx
+LINEAR_TEAM_ID=your-team-uuid
+LINEAR_TRIAGE_STATE_ID=your-state-uuid
+# Optional Linear settings:
+# LINEAR_PROJECT_ID=your-project-uuid
+# LINEAR_LABEL_BUG=your-bug-label-uuid
+# LINEAR_LABEL_REQUEST=your-request-label-uuid
+
+# ============================================================================
+# AI PROVIDER CONFIGURATION - Multi-Tier Fallback Strategy
+# ============================================================================
+#
+# TIER 1 (Primary):
+#   - classify: IBM Granite 4.0 (cheapest: 1,542 neurons/M input)
+#   - draft:    NVIDIA step-3.5-flash (40 req/min limit)
+#   - summarize: OpenRouter gemma-4-26b-a4b-it:free
+#
+# TIER 2 (Fallback - free models):
+#   - All tasks: OpenRouter gemma-3-27b-it:free
+#
+# TIER 3 (Emergency):
+#   - All tasks: OpenAI gpt-5.4-nano (flex tier, reasoning=none)
+
+# Tier 1 Keys (set at least one for draft/summarize)
+NVIDIA_API_KEY=nvidia-xxx      # Get from https://build.nvidia.com
+OPENROUTER_API_KEY=or-xxx       # Get from https://openrouter.ai
+
+# Tier 3 Emergency Key (optional but recommended)
+OPENAI_API_KEY=sk-xxx          # Get from https://platform.openai.com
+
+# Enable flex tier on OpenAI for 50% cost savings:
+# Dashboard → Billing → Flex Tier
+# Uses gpt-5.4-nano with reasoning=none for minimal cost
+
+# Other optional providers (not in fallback chain):
+# ANTHROPIC_API_KEY=sk-ant-xxx
+# GROQ_API_KEY=gsk_xxx
+# GOOGLE_API_KEY=AIzaSyA...
+# XAI_API_KEY=xai-xxx

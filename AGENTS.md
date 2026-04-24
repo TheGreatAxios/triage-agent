@@ -106,7 +106,22 @@ Required (set in .dev.vars locally, wrangler secrets in prod):
 - `TELEGRAM_BOT_TOKEN` — Telegram Bot API token
 - `TELEGRAM_WEBHOOK_SECRET` — Webhook verification secret
 - `SLACK_WEBHOOK_URL` — Slack incoming webhook
-- `LINEAR_API_KEY` — Linear API key
+
+Linear Integration (set via `wrangler secret put`):
+- `LINEAR_API_KEY` — Linear personal API key (Settings → API)
+- `LINEAR_TEAM_ID` — Team UUID where issues are created
+- `LINEAR_TRIAGE_STATE_ID` — Workflow state UUID for triage/backlog
+- `LINEAR_PROJECT_ID` — (Optional) Project UUID to assign issues to
+- `LINEAR_LABEL_BUG` — (Optional) Label UUID for bug classifications
+- `LINEAR_LABEL_REQUEST` — (Optional) Label UUID for feature request classifications
+
+Get Linear IDs via GraphQL:
+```bash
+curl -X POST https://api.linear.app/graphql \
+  -H "Authorization: YOUR_LINEAR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "query { teams { nodes { id name } } }"}'
+```
 
 Optional (enable alternate AI providers):
 - `NVIDIA_API_KEY` — NVIDIA NIM API key (free credits at build.nvidia.com)

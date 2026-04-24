@@ -11,6 +11,11 @@ export interface Env {
   // Escalation & Issue Tracking
   SLACK_WEBHOOK_URL: string;
   LINEAR_API_KEY: string;
+  LINEAR_TEAM_ID: string;
+  LINEAR_PROJECT_ID?: string;
+  LINEAR_TRIAGE_STATE_ID: string;
+  LINEAR_LABEL_BUG?: string;
+  LINEAR_LABEL_REQUEST?: string;
 
   // AI Providers (all optional - only set what you use)
   // Official SDK Providers
