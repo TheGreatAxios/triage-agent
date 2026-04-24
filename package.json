@@ -4,11 +4,10 @@
   "private": true,
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy --env production",
-    "deploy:staging": "wrangler deploy --env staging",
+    "deploy": "wrangler deploy",
     "types": "wrangler types",
     "db:migrate:local": "wrangler d1 migrations apply triage-agent-db --local",
-    "db:migrate:remote": "wrangler d1 migrations apply triage-agent-db --remote --env production"
+    "db:migrate:remote": "wrangler d1 migrations apply triage-agent-db --remote"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^1.0.0",

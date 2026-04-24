@@ -10,7 +10,7 @@
 		{
 			"binding": "DB",
 			"database_name": "triage-agent-db",
-			"database_id": "00000000-0000-0000-0000-000000000000",
+			"database_id": "${DATABASE_ID}",
 			"migrations_dir": "migrations"
 		}
 	],
@@ -30,26 +30,5 @@
 	},
 	"observability": {
 		"enabled": true
-	},
-	"env": {
-		"production": {
-			"d1_databases": [
-				{
-					"binding": "DB",
-					"database_name": "triage-agent-db",
-					"database_id": "${DATABASE_ID}",
-					"migrations_dir": "migrations"
-				}
-			],
-			"r2_buckets": [
-				{
-					"binding": "ARCHIVE",
-					"bucket_name": "${R2_BUCKET_NAME}"
-				}
-			],
-			"ai": {
-				"binding": "AI"
-			}
-		}
 	}
 }

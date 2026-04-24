@@ -83,48 +83,38 @@ npx wrangler r2 bucket create triage-agent-archive
 
 The project uses a hybrid approach for managing resource IDs:
 
-- **Base config** (`wrangler.jsonc`): Uses placeholder for local development
-- **Production environment**: Uses `DATABASE_ID` environment variable
-- **Secrets**: Stored via Wrangler (never committed)
+### 3. Configure Environment Variables
 
-Create `.dev.vars` for local development (copy from example):
+The project uses environment variable substitution in `wrangler.jsonc`:
+- `DATABASE_ID`: Your D1 database ID from step 2
 
+**For Cloudflare Dashboard (GitHub integration):**
+1. Go to your Worker in Cloudflare Dashboard
+2. Settings → Environment Variables
+3. Add: `DATABASE_ID` = `your-real-database-id-from-step-2`
+
+**For local deployment:**
+```bash
+export DATABASE_ID="your-real-database-id-from-step-2"
+bun run deploy
+```
+
+**For local development:**
 ```bash
 cp .dev.vars.example .dev.vars
-# Edit .dev.vars with your actual secrets
+# Edit .dev.vars with your actual secrets (local only)
 ```
-
-For production deployment, you have two options:
-
-**Option A: Environment variable (recommended for CI/CD)**
-```bash
-# Set the database ID as environment variable
-export DATABASE_ID="your-real-database-id-from-step-2"
-
-# Deploy to production environment
-bun run deploy --env production
-```
-
-**Option B: Direct in config (simpler for manual deploys)**
-Edit `wrangler.jsonc` and temporarily replace `${DATABASE_ID}` with your real ID in the `env.production` section, deploy, then revert.
 
 ### 4. Apply Database Migrations
 
 ```bash
-# Apply to production database (use --env production to match deployment)
-npx wrangler d1 migrations apply triage-agent-db --remote --env production
+# Apply to production database
+npx wrangler d1 migrations apply triage-agent-db --remote
 ```
 
-### 5. Set Environment Variables
+### 5. Set Secrets
 
-Create `.dev.vars` for local development:
-
-```bash
-cp .dev.vars.example .dev.vars
-# Edit .dev.vars with your actual values
-```
-
-Set production secrets:
+Set production secrets (never commit these):
 
 ```bash
 # Required secrets
@@ -139,7 +129,7 @@ npx wrangler secret put OPENAI_API_KEY
 npx wrangler secret put OPENROUTER_API_KEY
 ```
 
-### 6. Configure Telegram Bot
+### 6. Configure Telegram Bot & Deploy
 
 1. Create a bot via [@BotFather](https://t.me/BotFather)
 2. Set webhook URL:
@@ -147,23 +137,22 @@ npx wrangler secret put OPENROUTER_API_KEY
    curl -X POST "https://api.telegram.org/bot<TOKEN>/setWebhook" \
      -H "Content-Type: application/json" \
      -d '{
-       "url": "https://telegram-triage-agent.YOUR_SUBDOMAIN.workers.dev/webhook/telegram",
+       "url": "https://triage-agent.YOUR_SUBDOMAIN.workers.dev/webhook/telegram",
        "secret_token": "YOUR_WEBHOOK_SECRET"
      }'
    ```
 3. Get chat ID and add your bot to the group
 
-### 7. Deploy
+4. Deploy to Cloudflare:
+   ```bash
+   # Type check
+   npx tsc --noEmit
+   
+   # Deploy
+   bun run deploy
+   ```
 
-```bash
-# Type check
-npx tsc --noEmit
-
-# Deploy to Cloudflare
-bun run deploy
-```
-
-### 8. Verify Deployment
+### 7. Verify Deployment
 
 ```bash
 # Check health endpoint
