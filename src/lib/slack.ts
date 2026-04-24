@@ -58,10 +58,11 @@ export async function verifySlackRequestAsync(
 }
 
 /**
- * Send approval request to Slack via webhook.
+ * Send approval request to Slack via Bot API.
  */
 export async function sendApprovalRequestToSlack(
-  webhookUrl: string,
+  botToken: string,
+  channelId: string,
   approval: PendingApproval,
   priorSummary: PriorChatSummary | null,
   botUsername: string
@@ -72,32 +73,21 @@ export async function sendApprovalRequestToSlack(
         ? buildRichApprovalBlocks(approval, priorSummary, botUsername)
         : buildMinimalApprovalBlocks(approval, botUsername);
 
-    const payload = {
-      text: `🔔 New chat approval request: ${approval.chatTitle || "Untitled Chat"}`,
-      blocks,
-      unfurl_links: false,
-    };
+    const text = `🔔 New chat approval request: ${approval.chatTitle || "Untitled Chat"}`;
 
-    const resp = await fetch(webhookUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
+    const result = await postSlackMessage(botToken, channelId, text, blocks);
 
-    if (!resp.ok) {
-      const errorText = await resp.text();
-      throw new Error(`Slack webhook returned ${resp.status}: ${errorText}`);
-    }
-
-    // Webhook responses don't include message timestamp
-    // We'll need to update this later via chat.postMessage for full API
     logger.info("Approval request sent to Slack", {
       pending_id: approval.id,
       chat_title: approval.chatTitle,
       blocks_type: approval.slackBlocksType,
+      channel: result.channel,
     });
 
-    return { slackMessageTs: null, slackChannelId: null };
+    return {
+      slackMessageTs: result.ts,
+      slackChannelId: result.channel,
+    };
   } catch (err) {
     logger.error("Failed to send Slack approval request", {
       pending_id: approval.id,
@@ -409,20 +399,17 @@ export async function openBatchRejectModal(
 }
 
 /**
- * Send batch operation completion notification.
+ * Send batch operation completion notification via Bot API.
  */
 export async function sendBatchApprovalCompleteNotification(
-  webhookUrl: string,
+  botToken: string,
+  channelId: string,
   results: { approved: number; rejected: number; failed: number; errors: string[] },
   performedBy: string
 ): Promise<void> {
   try {
     const { approved, rejected, failed, errors } = results;
     const total = approved + rejected + failed;
-
-    let color = "#36a64f"; // Green
-    if (failed > 0) color = "#ff9900"; // Orange
-    if (approved === 0 && rejected === 0) color = "#ff0000"; // Red
 
     const blocks = [
       {
@@ -476,14 +463,8 @@ export async function sendBatchApprovalCompleteNotification(
       });
     }
 
-    await fetch(webhookUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        text: `Batch approval complete: ${approved} approved, ${rejected} rejected, ${failed} failed`,
-        blocks,
-      }),
-    });
+    const text = `Batch approval complete: ${approved} approved, ${rejected} rejected, ${failed} failed`;
+    await postSlackMessage(botToken, channelId, text, blocks);
   } catch (err) {
     logger.error("Failed to send batch completion notification", {
       error: err instanceof Error ? err.message : String(err),
@@ -492,10 +473,11 @@ export async function sendBatchApprovalCompleteNotification(
 }
 
 /**
- * Send daily summary to Slack.
+ * Send daily summary to Slack via Bot API.
  */
 export async function sendDailySummary(
-  webhookUrl: string,
+  botToken: string,
+  channelId: string,
   stats: {
     date: string;
     period: "morning" | "evening";
@@ -599,14 +581,8 @@ export async function sendDailySummary(
       },
     ];
 
-    await fetch(webhookUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        text: `${periodLabel}: ${stats.totalChats} chats, ${stats.totalMessages} messages`,
-        blocks,
-      }),
-    });
+    const text = `${periodLabel}: ${stats.totalChats} chats, ${stats.totalMessages} messages`;
+    await postSlackMessage(botToken, channelId, text, blocks);
 
     logger.info("Daily summary sent to Slack", {
       date: stats.date,

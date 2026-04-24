@@ -17,11 +17,11 @@ export interface Env {
   LINEAR_LABEL_BUG?: string;
   LINEAR_LABEL_REQUEST?: string;
 
-  // Slack Approval Flow (3 channels)
-  SLACK_APPROVAL_WEBHOOK_URL: string;  // Approval requests channel
-  SLACK_SUMMARY_WEBHOOK_URL: string;   // Daily summaries channel
+  // Slack Approval Flow
+  SLACK_BOT_TOKEN: string;              // Post messages, open modals (xoxb-...)
   SLACK_SIGNING_SECRET: string;         // Verify Slack interactions
-  SLACK_BOT_TOKEN: string;              // Post messages, open modals
+  SLACK_APPROVAL_CHANNEL_ID: string;  // Channel ID for approval requests (C123...)
+  SLACK_SUMMARY_CHANNEL_ID: string;    // Channel ID for daily summaries (C123...)
 
   // Bot Configuration
   NOTIFY_ON_APPROVAL?: string;          // "true" to send activation message (default: silent)

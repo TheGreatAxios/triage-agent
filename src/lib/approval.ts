@@ -329,7 +329,8 @@ export async function handleBotAddedToChat(
   // Send approval request to Slack
   try {
     const { slackMessageTs, slackChannelId } = await sendApprovalRequestToSlack(
-      env.SLACK_APPROVAL_WEBHOOK_URL,
+      env.SLACK_BOT_TOKEN,
+      env.SLACK_APPROVAL_CHANNEL_ID,
       pendingApproval,
       priorSummary,
       botMeta.username
@@ -672,7 +673,8 @@ export async function batchProcessApprovals(
   // Send batch completion notification
   const slackUserName = decisions[0]?.slackUserName || "Unknown";
   await sendBatchApprovalCompleteNotification(
-    env.SLACK_APPROVAL_WEBHOOK_URL,
+    env.SLACK_BOT_TOKEN,
+    env.SLACK_APPROVAL_CHANNEL_ID,
     results,
     slackUserName
   );

@@ -161,14 +161,14 @@ npx wrangler secret put TELEGRAM_BOT_TOKEN
 # Required - use the value you generated above
 npx wrangler secret put TELEGRAM_WEBHOOK_SECRET
 
-# Required for Slack escalation (existing feature)
+# Required for Slack escalation (existing webhook-based feature)
 npx wrangler secret put SLACK_WEBHOOK_URL
 
-# Required for Slack approval flow (3 separate channels)
-npx wrangler secret put SLACK_APPROVAL_WEBHOOK_URL    # Approval requests channel
-npx wrangler secret put SLACK_SUMMARY_WEBHOOK_URL     # Daily summaries channel
-npx wrangler secret put SLACK_SIGNING_SECRET          # From Slack app Basic Info
-npx wrangler secret put SLACK_BOT_TOKEN               # xoxb- token from OAuth
+# Required for Slack approval flow (modern Bot API - no webhooks needed)
+npx wrangler secret put SLACK_BOT_TOKEN                    # xoxb- token from OAuth
+npx wrangler secret put SLACK_SIGNING_SECRET               # From Slack app Basic Info
+npx wrangler secret put SLACK_APPROVAL_CHANNEL_ID        # Cxxx ID from #triage-approvals
+npx wrangler secret put SLACK_SUMMARY_CHANNEL_ID          # Cxxx ID from #triage-summaries
 
 # Optional: Enable activation notifications (default: silent)
 npx wrangler secret put NOTIFY_ON_APPROVAL            # Set to "true" to notify
@@ -268,18 +268,35 @@ Go to **Slash Commands** → Create New Command for each:
 | `/batch-reject` | Same as above | Batch reject multiple chats |
 | `/rejected-chats` | Same as above | View blacklisted chats |
 
-#### Set Up Webhook Channels
+#### Set Up Channels & Get Channel IDs
 
 Create three Slack channels (or use existing ones):
 
-1. **#triage-escalations** - For message escalations (existing `SLACK_WEBHOOK_URL`)
-2. **#triage-approvals** - For approval requests (`SLACK_APPROVAL_WEBHOOK_URL`)
-3. **#triage-summaries** - For daily stats (`SLACK_SUMMARY_WEBHOOK_URL`)
+1. **#triage-escalations** - For message escalations (uses legacy `SLACK_WEBHOOK_URL`)
+2. **#triage-approvals** - For approval requests (uses modern Bot API)
+3. **#triage-summaries** - For daily stats (uses modern Bot API)
 
-Get webhook URLs:
-1. In each channel: `/add apps` → Add **Incoming Webhooks**
-2. Or use Slack app → **Incoming Webhooks** → Add New Webhook to Workspace
-3. Copy each webhook URL and set as corresponding secret
+**Get Channel IDs (required for Bot API):**
+
+Method 1 - Right-click (fastest):
+1. Right-click the channel name in Slack
+2. **Copy link** → Paste somewhere
+3. Extract ID from URL: `https://yourworkspace.slack.com/archives/C1234567890`
+4. Channel ID = `C1234567890`
+
+Method 2 - Invite bot:
+1. In channel: `/invite @TriageBot Approvals`
+2. Channel ID appears in the URL
+
+**Invite Bot to Channels:**
+In each channel (#triage-approvals, #triage-summaries, #triage-escalations):
+```
+/add apps → TriageBot Approvals
+```
+
+Or: Channel settings → Add apps → TriageBot Approvals
+
+The bot uses `SLACK_BOT_TOKEN` to post directly to these channels - no webhooks needed for #triage-approvals or #triage-summaries.
 
 ### 7. Verify Deployment
 
@@ -534,12 +551,12 @@ curl -X POST "https://triage-agent.YOUR_SUBDOMAIN.workers.dev/webhook/telegram" 
 
 | Issue | Solution |
 |-------|----------|
-| No approval request in Slack | Check `SLACK_APPROVAL_WEBHOOK_URL` is set. Verify bot was added to group (not just messaged directly). Check `wrangler tail` for errors. |
+| No approval request in Slack | Check `SLACK_BOT_TOKEN`, `SLACK_APPROVAL_CHANNEL_ID`, and `SLACK_SIGNING_SECRET` are set. Verify bot was invited to #triage-approvals. Check `wrangler tail` for errors. |
 | Slack signature invalid | Ensure `SLACK_SIGNING_SECRET` matches your Slack app's Basic Info → Signing Secret. |
 | Slash commands not working | Verify Request URL in Slack app points to `/webhook/slack/commands`. Check command is installed to workspace. |
-| Can't approve/reject | Ensure `SLACK_BOT_TOKEN` has `chat:write` scope and is installed to the correct workspace. |
+| Can't approve/reject | Ensure `SLACK_BOT_TOKEN` has `chat:write` scope and is installed to the correct workspace. Verify bot is invited to #triage-approvals. |
 | Bot not leaving rejected chats | Check `TELEGRAM_BOT_TOKEN` is correct. Bot must be admin to leave groups. |
-| Daily summaries not sending | Verify `SLACK_SUMMARY_WEBHOOK_URL`. Check cron triggers are configured in `wrangler.jsonc`. |
+| Daily summaries not sending | Verify `SLACK_BOT_TOKEN` and `SLACK_SUMMARY_CHANNEL_ID`. Check bot is invited to #triage-summaries. Check cron triggers in `wrangler.jsonc`. |
 
 ## License
 

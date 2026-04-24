@@ -127,7 +127,7 @@ export async function sendDailySummaryIfScheduled(
     const stats = await calculateAndStoreDailyStats(env.DB, dateStr, period);
 
     // Send to Slack
-    await sendDailySummary(env.SLACK_SUMMARY_WEBHOOK_URL, {
+    await sendDailySummary(env.SLACK_BOT_TOKEN, env.SLACK_SUMMARY_CHANNEL_ID, {
       date: dateStr,
       period,
       totalChats: stats.totalChats,

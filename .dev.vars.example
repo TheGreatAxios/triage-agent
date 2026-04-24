@@ -2,19 +2,20 @@
 TELEGRAM_BOT_TOKEN=your-bot-token
 TELEGRAM_WEBHOOK_SECRET=your-webhook-secret
 
-# Required Slack (Escalations - existing feature)
+# Required Slack (Escalations - existing feature via webhook)
 SLACK_WEBHOOK_URL=https://hooks.slack.com/services/xxx/yyy/zzz
 
-# Required Slack (Approval Flow - new feature)
-# Create 3 separate channels for different purposes:
-# 1. Approval requests (where admin approves/rejects)
-SLACK_APPROVAL_WEBHOOK_URL=https://hooks.slack.com/services/xxx/yyy/zzz
-# 2. Daily summaries (morning/evening stats)
-SLACK_SUMMARY_WEBHOOK_URL=https://hooks.slack.com/services/xxx/yyy/zzz
-# 3. Get from Slack app → Basic Info → Signing Secret
-SLACK_SIGNING_SECRET=your-signing-secret
-# 4. Get from Slack app → OAuth & Permissions → Bot User OAuth Token
+# Required Slack (Approval Flow - new feature via Bot API)
+# 1. Get from Slack app → OAuth & Permissions → Bot User OAuth Token (after adding chat:write scope)
 SLACK_BOT_TOKEN=xoxb-your-bot-token
+# 2. Get from Slack app → Basic Info → Signing Secret
+SLACK_SIGNING_SECRET=your-signing-secret
+# 3. Channel ID for approval requests (right-click channel → Copy link → ID is last part)
+#    Format: C1234567890 (starts with C)
+SLACK_APPROVAL_CHANNEL_ID=C1234567890
+# 4. Channel ID for daily summaries (same method)
+SLACK_SUMMARY_CHANNEL_ID=C0987654321
+# 5. IMPORTANT: Invite bot to both channels with /invite @TriageBot Approvals
 
 # Optional: Send Telegram message when approved (default: silent)
 # NOTIFY_ON_APPROVAL=true
