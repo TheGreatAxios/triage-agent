@@ -52,12 +52,9 @@ export async function ingestUpdate(
   try {
     await updateConversationState(env.DB, dbChatId, event);
 
+    // Cancel any pending timers when a human responds
     if (!event.sender.isBot) {
       await cancelTimers(env.DB, dbChatId);
-    }
-
-    if (event.isMention && !event.sender.isBot) {
-      await scheduleNoResponseTimer(env.DB, dbChatId, "mention");
     }
   } catch (err) {
     logger.error("Failed to update conversation state", {
@@ -80,14 +77,31 @@ export async function ingestUpdate(
     });
   }
 
-  if (classification && event.isMention && !event.sender.isBot) {
+  // Skip response handling for bot messages
+  if (!classification || event.sender.isBot) {
+    return event;
+  }
+
+  // Bug/Request: immediate triage (Slack + Linear)
+  // Normal: schedule timer for delayed draft (60s wait for potential human response)
+  if (classification.label === "bug" || classification.label === "request") {
     const respondStart = Date.now();
     try {
       await handleResponse(env, dbChatId, classification);
       trackPipelineMetrics({ chatId: event.chatId, stage: "respond", durationMs: Date.now() - respondStart, success: true });
     } catch (err) {
       trackPipelineMetrics({ chatId: event.chatId, stage: "respond", durationMs: Date.now() - respondStart, success: false });
-      logger.error("Failed to handle response", {
+      logger.error("Failed to handle response for bug/request", {
+        update_id: event.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  } else if (classification.label === "normal") {
+    // Schedule timer to check for human response and draft if needed
+    try {
+      await scheduleNoResponseTimer(env.DB, dbChatId, "no_response");
+    } catch (err) {
+      logger.error("Failed to schedule timer for normal message", {
         update_id: event.id,
         error: err instanceof Error ? err.message : String(err),
       });

@@ -18,7 +18,7 @@ export interface AppConfig {
 }
 
 export const defaultConfig: AppConfig = {
-  noResponseDelaySeconds: 30,
+  noResponseDelaySeconds: 60,
   escalationThreshold: 0.4,
   autoSendThreshold: 0.85,
   maxHotMessages: 200,
