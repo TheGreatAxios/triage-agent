@@ -1,6 +1,6 @@
 import type { Env } from "../types/env";
 import type { ClassificationResult } from "../types/classification";
-import { generateDraft, markDraftSent, sendTelegramMessage } from "../lib/drafter";
+import { generateDraft, markDraftSent, sendTelegramMessage, DraftResult } from "../lib/drafter";
 import {
   escalateToSlack,
   getRecentMessagesForEscalation,
@@ -21,9 +21,10 @@ export async function handleResponse(
   env: Env,
   chatId: number,
   classification: ClassificationResult,
-  dbMessageId?: number
+  dbMessageId?: number,
+  toolContext?: string
 ): Promise<void> {
-  const draft = await generateDraft(env, chatId, classification);
+  const draft = await generateDraft(env, chatId, classification, toolContext);
 
   switch (draft.policyAction) {
     case "auto_send": {
@@ -68,11 +69,13 @@ export async function handleResponse(
         classification,
         reason: draft.policyReason,
         recentMessages,
+        responseConfidence: draft.responseConfidence, // NEW: Include in escalation
       });
 
       logger.info("Draft escalated to Slack", {
         chatId,
         draftId: draft.draftId,
+        responseConfidence: draft.responseConfidence,
       });
       break;
     }
@@ -81,7 +84,8 @@ export async function handleResponse(
       logger.info("Draft saved for review", {
         chatId,
         draftId: draft.draftId,
-        confidence: draft.confidence,
+        classificationConfidence: draft.confidence,
+        responseConfidence: draft.responseConfidence,
       });
       break;
     }

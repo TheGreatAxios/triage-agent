@@ -146,10 +146,10 @@ export async function persistClassification(
 ): Promise<void> {
   await db
     .prepare(
-      `INSERT INTO classifications (message_id, chat_id, label, confidence, method)
-       VALUES (?, ?, ?, ?, ?)`
+      `INSERT INTO classifications (message_id, chat_id, label, confidence, method, reasoning)
+       VALUES (?, ?, ?, ?, ?, ?)`
     )
-    .bind(messageId, chatId, result.label, result.confidence, result.method)
+    .bind(messageId, chatId, result.label, result.confidence, result.method, result.reasoning)
     .run();
 }
 

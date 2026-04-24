@@ -1,6 +1,6 @@
 import type { Env } from "../types/env";
-import type { ResponseAction } from "../types/draft";
-import type { ClassificationLabel } from "../types/classification";
+import type { ResponseAction, PolicyDecision } from "../types/draft";
+import type { ClassificationResult, ClassificationLabel } from "../types/classification";
 
 export interface AppConfig {
   /** Seconds to wait before triggering a draft when no human responds */
@@ -33,23 +33,31 @@ export function getConfig(): AppConfig {
 /**
  * Determine the response action based on classification confidence and label.
  *
- * - Escalate: label is "bug" or "request" (always relevant, notify Slack)
+ * - Escalate: label is "bug" or "request" (UNLESS dual confidence is high)
  *             OR confidence < escalationThreshold
  *             OR label is "unknown"
  * - Auto-send: confidence >= autoSendThreshold AND label is in autoSendLabels
+ *              OR (bug/request with classification > 0.8 AND response > 0.875)
  * - Draft-only: everything else
  */
 export function evaluateResponsePolicy(
-  confidence: number,
-  label: ClassificationLabel
-): { action: ResponseAction; reason: string } {
+  classification: ClassificationResult,
+  draftConfidence?: number
+): PolicyDecision {
   const config = getConfig();
+  const { confidence, label } = classification;
 
-  // Always escalate bugs and requests to Slack (relevant items need visibility)
+  // BUG/REQUEST: Can auto-send if BOTH confidences are high (dual-confidence)
   if (label === "bug" || label === "request") {
+    if (confidence > 0.8 && draftConfidence && draftConfidence > 0.875) {
+      return {
+        action: "auto_send",
+        reason: `High classification confidence (${confidence.toFixed(2)}) + high response quality (${draftConfidence.toFixed(2)})`,
+      };
+    }
     return {
       action: "escalate",
-      reason: `Relevant classification "${label}" requires Slack notification`,
+      reason: `${label} requires review (classification: ${confidence.toFixed(2)}, response: ${draftConfidence?.toFixed(2) || 'N/A'})`,
     };
   }
 

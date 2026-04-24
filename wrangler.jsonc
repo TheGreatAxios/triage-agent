@@ -20,6 +20,10 @@
 		{
 			"binding": "ARCHIVE",
 			"bucket_name": "triage-agent-archive"
+		},
+		{
+			"binding": "KNOWLEDGE_CACHE",
+			"bucket_name": "triage-knowledge-cache"
 		}
 	],
 	"triggers": {

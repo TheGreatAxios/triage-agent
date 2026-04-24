@@ -9,6 +9,7 @@ import { handleResponse } from "./respond";
 import { trackPipelineMetrics } from "../lib/metrics";
 import { logger } from "../lib/logger";
 import { handleBotAddedToChat, handleBotRemovedFromChat } from "../lib/approval";
+import { loadMCPServers, executeTools, formatToolContext } from "../lib/mcp";
 
 /**
  * Full ingestion pipeline: validate → normalize → persist.
@@ -115,7 +116,27 @@ export async function ingestUpdate(
   if (classification.label === "bug" || classification.label === "request") {
     const respondStart = Date.now();
     try {
-      await handleResponse(env, dbChatId, classification, dbMessageId);
+      // Load and execute MCP tools in parallel for additional context
+      const mcpServers = await loadMCPServers(
+        env.DB,
+        "default",
+        classification.label,
+        classification.confidence
+      );
+
+      let toolContext = "";
+      if (mcpServers.length > 0) {
+        const toolResults = await executeTools(env, mcpServers, event.text);
+        toolContext = formatToolContext(toolResults);
+
+        logger.debug("MCP tools executed", {
+          chatId: dbChatId,
+          toolsUsed: toolResults.map((r) => r.tool).join(","),
+          resultsCount: toolResults.filter((r) => r.result).length,
+        });
+      }
+
+      await handleResponse(env, dbChatId, classification, dbMessageId, toolContext);
       trackPipelineMetrics({ chatId: event.chatId, stage: "respond", durationMs: Date.now() - respondStart, success: true });
     } catch (err) {
       trackPipelineMetrics({ chatId: event.chatId, stage: "respond", durationMs: Date.now() - respondStart, success: false });

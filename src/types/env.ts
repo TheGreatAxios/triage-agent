@@ -3,6 +3,7 @@ export interface Env {
   DB: D1Database;
   AI: Ai;
   ARCHIVE: R2Bucket;
+  KNOWLEDGE_CACHE: R2Bucket;
 
   // Telegram
   TELEGRAM_BOT_TOKEN: string;
@@ -46,6 +47,10 @@ export interface Env {
   // Custom/Self-hosted (optional)
   // Use apiKeyEnv in ModelConfig to reference custom env vars
   // Example: OLLAMA_API_KEY, LOCALAI_API_KEY, etc.
+
+  // MCP Tools (all optional)
+  PARALLEL_API_KEY?: string;      // Optional - free tier available
+  CONTEXT7_API_KEY?: string;      // Optional - free tier available
 }
 
 export type AppEnv = {

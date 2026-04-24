@@ -12,6 +12,7 @@ export interface EscalationContext {
   classification: ClassificationResult;
   reason: string;
   recentMessages: string[];
+  responseConfidence?: number; // NEW: AI self-assessment for dual-confidence policy
 }
 
 export interface EscalationResult {
@@ -51,6 +52,9 @@ export async function escalateToSlack(
 function buildSlackPayload(ctx: EscalationContext): Record<string, unknown> {
   const chatLabel = ctx.chatTitle ?? `Chat ${ctx.chatId}`;
   const confidencePercent = (ctx.classification.confidence * 100).toFixed(0);
+  const responseConfPercent = ctx.responseConfidence
+    ? `${(ctx.responseConfidence * 100).toFixed(0)}%`
+    : "N/A";
 
   const blocks: Record<string, unknown>[] = [
     {
@@ -76,10 +80,16 @@ function buildSlackPayload(ctx: EscalationContext): Record<string, unknown> {
     },
     {
       type: "section",
-      text: {
-        type: "mrkdwn",
-        text: `*Reason:*\n${ctx.reason}`,
-      },
+      fields: [
+        {
+          type: "mrkdwn",
+          text: `*Response Quality:*\n${responseConfPercent}`,
+        },
+        {
+          type: "mrkdwn",
+          text: `*Reason:*\n${ctx.reason}`,
+        },
+      ],
     },
   ];
 

@@ -9,14 +9,22 @@ import { logger } from "./logger";
 import { getRecentMessagesWithSenders, buildMessageContext } from "./queries";
 import { DatabaseError, AIError } from "./errors";
 import { sanitizeContextInput } from "./sanitize";
+import { validateLinks, sanitizeInvalidLinks } from "./links";
 
 export interface DraftResult {
   draftId: number;
   content: string;
   confidence: number;
+  responseConfidence: number; // AI self-assessment of response quality
   status: DraftStatus;
   policyAction: "auto_send" | "draft_only" | "escalate";
   policyReason: string;
+}
+
+interface StructuredDraft {
+  response: string;
+  confidence: number; // Self-assessment 0-1
+  reasoning: string;
 }
 
 const DRAFT_PROMPT = `You are a helpful support assistant for a Telegram community.
@@ -27,21 +35,51 @@ Rules:
 - Be friendly but professional
 - If you're unsure, say so honestly
 - Never make up information
-- Do not use markdown formatting
-- Respond naturally as if you're part of the chat`;
+- Use markdown for code: \`inline\` or \`\`\`blocks\`\`\`
+- Include links to documentation when available
+- Verify any links you provide (must return 200)
+- Respond naturally as if you're part of the chat
+
+Self-assess your confidence in this response (0-1):
+- 0.9-1.0: Exact solution, verified links, very confident
+- 0.8-0.9: Good approach, working links, minor uncertainty  
+- 0.7-0.8: Reasonable but needs verification
+- <0.8: Don't auto-send, needs human review
+
+Respond in this exact JSON format:
+{"response": "your response text with \`code\` and [links](url)", "confidence": 0.92, "reasoning": "brief explanation"}`;
 
 /**
  * Generate a draft response for a chat using recent context and AI.
- * Evaluates the response policy and persists the draft with appropriate status.
+ * Evaluates the response policy (with dual-confidence for bugs/requests) and persists the draft.
  */
 export async function generateDraft(
   env: Env,
   chatId: number,
-  classification: ClassificationResult
+  classification: ClassificationResult,
+  toolContext?: string // Optional: results from MCP tools
 ): Promise<DraftResult> {
   const context = await buildContext(env.DB, chatId);
-  const content = await generateDraftContent(env, context);
-  const policy = evaluateResponsePolicy(classification.confidence, classification.label);
+  const fullContext = toolContext ? `${context}\n\nExternal resources:\n${toolContext}` : context;
+
+  const structured = await generateStructuredDraft(env, fullContext);
+
+  // Validate and sanitize links before persisting
+  const linkChecks = await validateLinks(structured.response);
+  const sanitizedResponse = sanitizeInvalidLinks(structured.response, linkChecks);
+  const invalidLinkCount = linkChecks.filter((l) => !l.valid).length;
+
+  // Reduce confidence if links are invalid
+  let adjustedConfidence = structured.confidence;
+  if (invalidLinkCount > 0) {
+    adjustedConfidence = Math.max(0, structured.confidence - 0.1 * invalidLinkCount);
+    logger.warn("Draft has invalid links, reducing confidence", {
+      chatId,
+      invalidCount: invalidLinkCount,
+    });
+  }
+
+  const policy = evaluateResponsePolicy(classification, adjustedConfidence);
 
   const status: DraftStatus =
     policy.action === "auto_send"
@@ -50,20 +88,31 @@ export async function generateDraft(
         ? "escalated"
         : "pending";
 
-  const draftId = await persistDraft(env.DB, chatId, content, classification.confidence, status);
+  const draftId = await persistDraft(
+    env.DB,
+    chatId,
+    sanitizedResponse,
+    classification.confidence,
+    adjustedConfidence,
+    status
+  );
 
   logger.info("Draft generated", {
     chatId,
     draftId,
-    confidence: classification.confidence,
+    classificationConfidence: classification.confidence,
+    responseConfidence: adjustedConfidence,
+    originalConfidence: structured.confidence,
+    invalidLinks: invalidLinkCount,
     action: policy.action,
     reason: policy.reason,
   });
 
   return {
     draftId,
-    content,
+    content: sanitizedResponse,
     confidence: classification.confidence,
+    responseConfidence: adjustedConfidence,
     status,
     policyAction: policy.action,
     policyReason: policy.reason,
@@ -92,7 +141,7 @@ async function buildContext(db: D1Database, chatId: number): Promise<string> {
   return context;
 }
 
-async function generateDraftContent(env: Env, context: string): Promise<string> {
+async function generateStructuredDraft(env: Env, context: string): Promise<StructuredDraft> {
   try {
     const model = getModel(env, "draft");
     // Sanitize conversation context to prevent prompt injection
@@ -100,27 +149,69 @@ async function generateDraftContent(env: Env, context: string): Promise<string> 
     const { text } = await generateText({
       model,
       system: DRAFT_PROMPT,
-      prompt: `Here is the conversation context:\n\n${sanitizedContext}\n\nGenerate a helpful response:`,
-      maxOutputTokens: 200,
+      prompt: `Here is the conversation context:\n\n${sanitizedContext}\n\nGenerate a helpful response with confidence assessment:`,
+      maxOutputTokens: 300,
       providerOptions: {
         openai: {
-          reasoningEffort: "none",  // No reasoning tokens for nano
-          serviceTier: "flex",      // 50% cost savings
+          reasoningEffort: "none",
+          serviceTier: "flex",
         },
       },
     });
 
-    return text.trim();
+    // Parse structured JSON response
+    const parsed = parseStructuredDraft(text);
+    if (parsed) {
+      return parsed;
+    }
+
+    // Fallback: treat entire response as the draft with low confidence
+    logger.warn("Failed to parse structured draft, using fallback", { raw: text.slice(0, 200) });
+    return {
+      response: text.trim(),
+      confidence: 0.6,
+      reasoning: "Unstructured response - parse failed",
+    };
   } catch (err) {
     const error = new AIError(
       "Draft generation failed",
-      "workers-ai", // Could be dynamic based on actual provider
+      "workers-ai",
       "@cf/meta/llama-3.1-8b-instruct",
       "draft",
       { originalError: err instanceof Error ? err.message : String(err) }
     );
     logger.error(error.message, error.toJSON());
-    return "I'm not sure how to help with that. Let me get a human to assist you.";
+    return {
+      response: "I'm not sure how to help with that. Let me get a human to assist you.",
+      confidence: 0.0,
+      reasoning: "Generation failed",
+    };
+  }
+}
+
+function parseStructuredDraft(text: string): StructuredDraft | null {
+  try {
+    // Extract JSON from response (handles cases where model adds extra text)
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return null;
+
+    const parsed = JSON.parse(jsonMatch[0]) as Partial<StructuredDraft>;
+
+    // Validate required fields
+    if (typeof parsed.response !== "string" || typeof parsed.confidence !== "number") {
+      return null;
+    }
+
+    // Normalize confidence to 0-1 range
+    const confidence = Math.max(0, Math.min(1, parsed.confidence));
+
+    return {
+      response: parsed.response.trim(),
+      confidence,
+      reasoning: parsed.reasoning || "No reasoning provided",
+    };
+  } catch {
+    return null;
   }
 }
 
@@ -129,15 +220,16 @@ async function persistDraft(
   chatId: number,
   content: string,
   confidence: number,
+  responseConfidence: number,
   status: DraftStatus
 ): Promise<number> {
   try {
     await db
       .prepare(
-        `INSERT INTO drafts (chat_id, content, confidence, status)
-         VALUES (?, ?, ?, ?)`
+        `INSERT INTO drafts (chat_id, content, confidence, response_confidence, status)
+         VALUES (?, ?, ?, ?, ?)`
       )
-      .bind(chatId, content, confidence, status)
+      .bind(chatId, content, confidence, responseConfidence, status)
       .run();
 
     const row = await db
