@@ -1,4 +1,4 @@
-# Telegram Triage Agent
+# Triage Agent
 
 An AI-powered Cloudflare Worker that automatically ingests Telegram messages, classifies them (bug/request/normal), drafts AI responses, and escalates to Slack with Linear ticket creation for bugs and feature requests.
 
@@ -147,7 +147,7 @@ npx wrangler secret put OPENROUTER_API_KEY
    ```bash
    # Type check
    npx tsc --noEmit
-   
+
    # Deploy
    bun run deploy
    ```
