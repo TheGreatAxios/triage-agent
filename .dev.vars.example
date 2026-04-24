@@ -1,0 +1,8 @@
+TELEGRAM_BOT_TOKEN=your-bot-token
+TELEGRAM_WEBHOOK_SECRET=your-webhook-secret
+SLACK_WEBHOOK_URL=https://hooks.slack.com/services/xxx/yyy/zzz
+LINEAR_API_KEY=your-linear-api-key
+# Optional: set to route AI tasks to alternative providers
+NVIDIA_API_KEY=your-nvidia-nim-key
+OPENAI_API_KEY=your-openai-key
+OPENROUTER_API_KEY=your-openrouter-key

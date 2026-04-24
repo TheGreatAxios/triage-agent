@@ -1,0 +1,35 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "telegram-triage-agent",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-04-01",
+  "compatibility_flags": ["nodejs_compat"],
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "telegram-agent-db",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+
+  "ai": {
+    "binding": "AI"
+  },
+
+  "r2_buckets": [
+    {
+      "binding": "ARCHIVE",
+      "bucket_name": "telegram-agent-archive"
+    }
+  ],
+
+  "triggers": {
+    "crons": ["* * * * *"]
+  },
+
+  "observability": {
+    "enabled": true
+  }
+}
