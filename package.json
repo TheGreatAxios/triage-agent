@@ -1,6 +1,6 @@
 {
   "name": "triage-agent",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "license": "MIT",
   "author": "Sawyer Cutler <sawyer@dirtroad.dev>",
