@@ -10,8 +10,13 @@
     "db:migrate:remote": "wrangler d1 migrations apply telegram-agent-db --remote"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "^1.0.0",
+    "@ai-sdk/google": "^1.0.0",
+    "@ai-sdk/groq": "^1.0.0",
     "@ai-sdk/openai": "^3.0.53",
     "@ai-sdk/openai-compatible": "^2.0.41",
+    "@ai-sdk/xai": "^1.0.0",
+    "@openrouter/ai-sdk-provider": "^1.0.0",
     "ai": "^6.0.168",
     "hono": "^4.7.0",
     "workers-ai-provider": "^3.1.12"
