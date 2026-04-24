@@ -84,9 +84,15 @@ migrations/
 
 ## Response Policy
 
-- **auto_send:** confidence ≥ 0.85 AND label in `autoSendLabels`
-- **escalate:** confidence < 0.4 OR label is "unknown"
+- **auto_send (normal):** classification confidence ≥ 0.85 AND label in `autoSendLabels` (e.g., "normal")
+- **auto_send (bug/request):** classification confidence > 0.8 AND response confidence > 0.875 — bug and feature request classifications can now auto-send if both thresholds are met
+- **escalate:** classification confidence < 0.4 OR label is "unknown"
 - **draft_only:** everything in between
+
+Dual-confidence thresholds for sensitive classifications (bug, feature_request):
+- Classification confidence must be > 0.8 (high certainty of issue type)
+- Response confidence must be > 0.875 (very high certainty of response quality)
+- Both must be satisfied for auto-send; otherwise escalates to human review
 
 ## AI Provider Routing (src/lib/ai.ts)
 
@@ -139,6 +145,8 @@ Bindings (wrangler.jsonc):
 Core tables: `chats`, `chat_participants`, `active_messages`, `conversation_state`, `summaries`, `classifications`, `drafts`, `escalations`, `linear_links`, `archives`, `timers`
 
 Approval system: `pending_approvals`, `chat_membership_history`, `daily_stats`, `app_config`
+
+MCP Registry: `mcp_servers`, `tool_executions`
 
 All schemas in `migrations/` — check numbered files for full definitions.
 
@@ -220,6 +228,191 @@ await db.prepare(
   `INSERT INTO chats (telegram_chat_id, type, title, user_preferences)
    VALUES (?, ?, ?, ?)`
 ).bind(chatId, type, title, prefs);
+```
+
+### MCP Tables (Runtime Config)
+
+The `mcp_servers` and `tool_executions` tables are **runtime configuration** — no migration needed to add new MCPs. Simply insert rows via SQL:
+
+```sql
+-- Add a new MCP server
+INSERT INTO mcp_servers (project_id, name, transport, connection_config, auth_config, enabled)
+VALUES ('default', 'my-api', 'http', '{"baseUrl":"https://api.example.com"}', NULL, 1);
+
+-- Add tools for the server
+INSERT INTO mcp_tools (server_id, name, description, parameters_schema, enabled)
+VALUES (last_insert_rowid(), 'search', 'Search the API', '{"type":"object","properties":{"q":{"type":"string"}}}', 1);
+```
+
+MCP servers are loaded dynamically at runtime from D1. No code changes or deployments required.
+
+## MCP Registry System
+
+Dynamic MCP (Model Context Protocol) server registry for tool execution. D1-backed configuration with R2-cached results.
+
+### Architecture Overview
+
+```
+┌─────────────────┐     ┌──────────────┐     ┌─────────────────┐
+│   D1 (Config)   │────▶│  MCP Loader  │────▶│  Tool Executor  │
+│  mcp_servers    │     │              │     │                 │
+│  mcp_tools      │     │ Loads server │     │ HTTP/SSE calls  │
+└─────────────────┘     │ + tool defs  │     │ with retry      │
+                        └──────────────┘     └─────────────────┘
+                                                       │
+                                                       ▼
+                                               ┌──────────────┐
+                                               │  R2 (Cache)  │
+                                               │ SHA-256 key  │
+                                               │ 24h TTL      │
+                                               └──────────────┘
+```
+
+**Key Design Decisions:**
+- **D1 for config**: Servers and tools stored as rows; enables runtime registration without code changes
+- **Per-project isolation**: `project_id` column allows multi-tenant deployments
+- **R2 for results**: Tool execution results cached with hashed keys (SHA-256 of tool+params) to avoid re-execution
+- **HTTP transport**: Primary transport; SSE support planned
+
+### Adding MCPs via SQL
+
+No migration required — insert directly into D1:
+
+```sql
+-- 1. Register an MCP server
+INSERT INTO mcp_servers (
+  project_id,           -- 'default' or your project slug
+  name,                 -- unique server identifier
+  transport,            -- 'http' (only supported currently)
+  connection_config,    -- JSON: { baseUrl, timeoutMs, headers }
+  auth_config,          -- JSON: { type: 'bearer', token: '...' } or null
+  enabled               -- 1 = active, 0 = disabled
+) VALUES (
+  'default',
+  'stripe-api',
+  'http',
+  '{"baseUrl":"https://api.stripe.com/v1","timeoutMs":30000}',
+  '{"type":"bearer","token_env":"STRIPE_SECRET_KEY"}',
+  1
+);
+
+-- 2. Register tools for the server
+INSERT INTO mcp_tools (server_id, name, description, parameters_schema, enabled)
+SELECT 
+  id,
+  'get_customer',
+  'Retrieve a Stripe customer by ID',
+  '{"type":"object","required":["customer_id"],"properties":{"customer_id":{"type":"string"}}}',
+  1
+FROM mcp_servers WHERE name = 'stripe-api';
+```
+
+**Connection Config Schema:**
+```json
+{
+  "baseUrl": "https://api.example.com",
+  "timeoutMs": 30000,
+  "headers": { "X-Custom-Header": "value" }
+}
+```
+
+**Auth Config Schema:**
+```json
+// Bearer token from env var
+{"type": "bearer", "token_env": "API_TOKEN"}
+
+// Static header
+{"type": "header", "header_name": "X-API-Key", "value_env": "API_KEY"}
+```
+
+### Per-Project Isolation
+
+All MCP tables have `project_id` (default: `'default'`). This enables:
+- Multi-tenant deployments (one Worker, many projects)
+- Staging vs production separation
+- Customer-specific MCP configurations
+
+Query pattern always includes `project_id`:
+```typescript
+await db.prepare(
+  `SELECT * FROM mcp_servers WHERE project_id = ? AND enabled = 1`
+).bind(projectId);
+```
+
+### Tool Execution Flow
+
+```
+1. Classifier detects tool need (e.g., "check customer status")
+          │
+          ▼
+2. Drafter calls MCPRegistry.executeTool(projectId, toolName, params)
+          │
+          ▼
+3. Registry loads server config from D1 (cached in-memory per-request)
+          │
+          ▼
+4. Check R2 cache: SHA256(toolName + canonicalJSON(params))
+   ├─ Cache hit → return cached result
+   └─ Cache miss → execute HTTP call
+          │
+          ▼
+5. Execute: HTTP POST with retry logic (3 attempts, exponential backoff)
+          │
+          ▼
+6. Persist result to R2 (24h TTL) + log to tool_executions table
+          │
+          ▼
+7. Return result to drafter for inclusion in AI response
+```
+
+**Error Handling:**
+- Network errors: 3 retries with exponential backoff (100ms, 200ms, 400ms)
+- HTTP 4xx/5xx: Logged but not retried (4xx = client error, 5xx = may retry on idempotent)
+- Timeouts: `timeoutMs` from connection_config (default 30s)
+- All attempts logged to `tool_executions` with `status: 'error'` and error message
+
+### Caching Strategy
+
+**Cache Key Generation:**
+```typescript
+const cacheKey = `tool:${crypto.subtle.digest('SHA-256', 
+  new TextEncoder().encode(`${toolName}:${JSON.stringify(params)}`)
+)}`;
+```
+
+**Cache Layers:**
+1. **R2 (persistent)**: 24h TTL, survives Worker restarts
+2. **In-memory (ephemeral)**: Per-request only, no cross-request caching
+
+**Cache Invalidation:**
+- Automatic: R2 objects expire after 24h
+- Manual: Delete R2 object by key prefix `tool:`
+- Tool-specific: Add `cache_ttl_seconds` to mcp_tools row (future enhancement)
+
+**Cache Bypass:**
+Add `_skip_cache: true` to params (not yet implemented — planned for v2).
+
+### Tool Execution Logging
+
+Every execution recorded in `tool_executions`:
+
+| Column | Purpose |
+|--------|---------|
+| `tool_id` | Foreign key to mcp_tools |
+| `chat_id` | Context for the execution |
+| `parameters` | JSON params (for audit/debug) |
+| `result` | JSON result or error payload |
+| `status` | 'success', 'error', 'timeout' |
+| `execution_time_ms` | Performance metric |
+| `cached` | 1 if R2 cache hit |
+
+Query recent executions:
+```sql
+SELECT t.name, e.status, e.execution_time_ms, e.created_at
+FROM tool_executions e
+JOIN mcp_tools t ON e.tool_id = t.id
+WHERE e.created_at > datetime('now', '-1 hour')
+ORDER BY e.created_at DESC;
 ```
 
 ## Commands

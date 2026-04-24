@@ -19,6 +19,8 @@ export interface DraftResult {
   status: DraftStatus;
   policyAction: "auto_send" | "draft_only" | "escalate";
   policyReason: string;
+  toolsUsed?: string[];
+  toolResults?: Array<{ tool: string; summary: string }>;
 }
 
 interface StructuredDraft {
@@ -57,7 +59,8 @@ export async function generateDraft(
   env: Env,
   chatId: number,
   classification: ClassificationResult,
-  toolContext?: string // Optional: results from MCP tools
+  toolContext?: string, // Optional: results from MCP tools
+  toolResults?: Array<{ tool: string; result: unknown; summary: string }> // Optional: raw tool results for persistence
 ): Promise<DraftResult> {
   const context = await buildContext(env.DB, chatId);
   const fullContext = toolContext ? `${context}\n\nExternal resources:\n${toolContext}` : context;
@@ -88,13 +91,18 @@ export async function generateDraft(
         ? "escalated"
         : "pending";
 
+  const toolsUsed = toolResults?.map((r) => r.tool);
+  const toolResultsForPersist = toolResults?.map((r) => ({ tool: r.tool, summary: r.summary }));
+
   const draftId = await persistDraft(
     env.DB,
     chatId,
     sanitizedResponse,
     classification.confidence,
     adjustedConfidence,
-    status
+    status,
+    toolsUsed,
+    toolResultsForPersist
   );
 
   logger.info("Draft generated", {
@@ -116,6 +124,8 @@ export async function generateDraft(
     status,
     policyAction: policy.action,
     policyReason: policy.reason,
+    toolsUsed,
+    toolResults: toolResultsForPersist,
   };
 }
 
@@ -221,15 +231,25 @@ async function persistDraft(
   content: string,
   confidence: number,
   responseConfidence: number,
-  status: DraftStatus
+  status: DraftStatus,
+  toolsUsed?: string[],
+  toolResults?: Array<{ tool: string; summary: string }>
 ): Promise<number> {
   try {
     await db
       .prepare(
-        `INSERT INTO drafts (chat_id, content, confidence, response_confidence, status)
-         VALUES (?, ?, ?, ?, ?)`
+        `INSERT INTO drafts (chat_id, content, confidence, response_confidence, status, tools_used, tool_results)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
       )
-      .bind(chatId, content, confidence, responseConfidence, status)
+      .bind(
+        chatId,
+        content,
+        confidence,
+        responseConfidence,
+        status,
+        toolsUsed ? JSON.stringify(toolsUsed) : null,
+        toolResults ? JSON.stringify(toolResults) : null
+      )
       .run();
 
     const row = await db

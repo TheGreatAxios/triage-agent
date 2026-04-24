@@ -15,6 +15,10 @@ export interface AppConfig {
   summaryMaxAgeMinutes: number;
   /** Classification labels that are safe for auto-send when above autoSendThreshold */
   autoSendLabels: ClassificationLabel[];
+  /** Confidence reduction per broken link found in draft */
+  linkValidationPenalty: number;
+  /** Timeout in ms for link validation checks */
+  linkValidationTimeout: number;
 }
 
 export const defaultConfig: AppConfig = {
@@ -24,6 +28,8 @@ export const defaultConfig: AppConfig = {
   maxHotMessages: 200,
   summaryMaxAgeMinutes: 30,
   autoSendLabels: ["normal"],
+  linkValidationPenalty: 0.1,
+  linkValidationTimeout: 5000,
 };
 
 export function getConfig(): AppConfig {

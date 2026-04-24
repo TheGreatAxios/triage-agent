@@ -7,6 +7,7 @@ export interface MCPServerConfig {
   id: number;
   projectId: string;
   name: string;
+  description?: string | null; // Human-readable for codemode/AI
   enabled: boolean;
   config: {
     type: "mcp-http" | "rest";
@@ -30,6 +31,112 @@ export interface ToolResult {
 }
 
 /**
+ * Add a new MCP server with simplified parameters.
+ * 
+ * Example:
+ * ```typescript
+ * await addMCPServer(env.DB, {
+ *   name: 'my-search',
+ *   url: 'https://api.example.com/mcp',
+ *   tools: ['search'],
+ *   authEnvVar: 'MY_API_KEY' // optional
+ * });
+ * ```
+ */
+export async function addMCPServer(
+  db: D1Database,
+  params: {
+    name: string;
+    url: string;
+    tools: string[];
+    description?: string; // For codemode: what this MCP does
+    authEnvVar?: string;
+    forLabels?: string[];
+    timeout?: number;
+    priority?: number;
+    projectId?: string;
+  }
+): Promise<void> {
+  const {
+    name,
+    url,
+    tools,
+    description,
+    authEnvVar,
+    forLabels = ["bug", "request"],
+    timeout = 5000,
+    priority = 50,
+    projectId = "default",
+  } = params;
+
+  const config = {
+    type: "mcp-http" as const,
+    url,
+    timeout,
+    tools,
+    retryAttempts: 2,
+    ...(authEnvVar && { authEnvVar }),
+  };
+
+  await db
+    .prepare(
+      `INSERT INTO mcp_servers (project_id, name, description, config, for_labels, priority, enabled)
+       VALUES (?, ?, ?, ?, ?, ?, true)
+       ON CONFLICT (project_id, name) DO UPDATE SET
+         description = excluded.description,
+         config = excluded.config,
+         for_labels = excluded.for_labels,
+         priority = excluded.priority,
+         enabled = true,
+         updated_at = datetime('now')`
+    )
+    .bind(
+      projectId,
+      name,
+      description ?? null,
+      JSON.stringify(config),
+      JSON.stringify(forLabels),
+      priority
+    )
+    .run();
+}
+
+/**
+ * Quick templates for common MCP types.
+ */
+export const MCPTemplates = {
+  /** Web search API (like Parallel) */
+  webSearch: (url: string, authEnvVar?: string) => ({
+    type: "mcp-http" as const,
+    url,
+    timeout: 5000,
+    tools: ["web_search", "web_fetch"],
+    retryAttempts: 2,
+    ...(authEnvVar && { authEnvVar }),
+  }),
+
+  /** Documentation API (like Context7) */
+  docs: (url: string, authEnvVar?: string) => ({
+    type: "mcp-http" as const,
+    url,
+    timeout: 5000,
+    tools: ["query-docs", "resolve-library-id"],
+    retryAttempts: 2,
+    ...(authEnvVar && { authEnvVar }),
+  }),
+
+  /** Generic API */
+  api: (url: string, tools: string[], authEnvVar?: string) => ({
+    type: "mcp-http" as const,
+    url,
+    timeout: 5000,
+    tools,
+    retryAttempts: 2,
+    ...(authEnvVar && { authEnvVar }),
+  }),
+};
+
+/**
  * Load enabled MCP servers for a project and classification
  */
 export async function loadMCPServers(
@@ -51,6 +158,7 @@ export async function loadMCPServers(
       id: number;
       project_id: string;
       name: string;
+      description: string | null;
       enabled: number;
       config: string;
       for_labels: string | null;
@@ -77,6 +185,7 @@ export async function loadMCPServers(
       id: row.id,
       projectId: row.project_id,
       name: row.name,
+      description: row.description,
       enabled: Boolean(row.enabled),
       config: JSON.parse(row.config) as MCPServerConfig["config"],
       forLabels: row.for_labels ? JSON.parse(row.for_labels) : null,

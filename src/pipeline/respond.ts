@@ -22,9 +22,10 @@ export async function handleResponse(
   chatId: number,
   classification: ClassificationResult,
   dbMessageId?: number,
-  toolContext?: string
+  toolContext?: string,
+  toolResults?: Array<{ tool: string; result: unknown; summary: string }>
 ): Promise<void> {
-  const draft = await generateDraft(env, chatId, classification, toolContext);
+  const draft = await generateDraft(env, chatId, classification, toolContext, toolResults);
 
   switch (draft.policyAction) {
     case "auto_send": {

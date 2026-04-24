@@ -48,7 +48,7 @@ async function executeSingleTool(
 
   try {
     // Check cache first (external knowledge only)
-    const cacheKey = `knowledge/${config.name}/${hashQuery(query)}`;
+    const cacheKey = `knowledge/${config.name}/${await hashQuery(query)}`;
     const cached = await env.KNOWLEDGE_CACHE?.get(cacheKey);
     if (cached) {
       const body = await cached.text();
@@ -196,15 +196,53 @@ async function logExecution(
   }
 }
 
-function hashQuery(query: string): string {
-  // Simple hash for cache keys
-  let hash = 0;
-  for (let i = 0; i < query.length; i++) {
-    const char = query.charCodeAt(i);
-    hash = (hash << 5) - hash + char;
-    hash = hash & hash;
+/**
+ * Generate cache key hash for a query.
+ * Uses SHA-256 via crypto.subtle when available (256-bit security),
+ * falls back to FNV-1a 64-bit hash for compatibility.
+ * Includes query length in the key to reduce collision risk.
+ */
+async function hashQuery(query: string): Promise<string> {
+  const len = query.length;
+  const encoder = new TextEncoder();
+  const data = encoder.encode(query);
+
+  // Prefer SHA-256 via crypto.subtle for 256-bit collision resistance
+  if (typeof crypto !== "undefined" && crypto.subtle) {
+    try {
+      const digest = await crypto.subtle.digest("SHA-256", data);
+      const hashArray = new Uint8Array(digest);
+      const hashHex = Array.from(hashArray)
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join("");
+      return `${len}:${hashHex}`;
+    } catch {
+      // Fall through to FNV-1a on error
+    }
   }
-  return Math.abs(hash).toString(36);
+
+  // FNV-1a 64-bit fallback (good distribution, fast in pure JS)
+  const hashHex = fnv1a64(data);
+  return `${len}:${hashHex}`;
+}
+
+/**
+ * FNV-1a 64-bit hash algorithm.
+ * Uses BigInt for 64-bit arithmetic. Returns 16-char hex string.
+ */
+function fnv1a64(data: Uint8Array): string {
+  const FNV_OFFSET_BASIS = BigInt("14695981039346656037"); // 2^64 + 2^8 + 0x3c6ef372bf
+  const FNV_PRIME = BigInt("1099511628211"); // 2^40 + 2^8 + 0xb3
+  const MODULO = BigInt("18446744073709551616"); // 2^64
+
+  let hash = FNV_OFFSET_BASIS;
+  for (let i = 0; i < data.length; i++) {
+    hash ^= BigInt(data[i]);
+    hash = (hash * FNV_PRIME) % MODULO;
+  }
+
+  // Return 16-character hex (64 bits)
+  return hash.toString(16).padStart(16, "0");
 }
 
 function assessQuality(toolName: string, result: unknown): ToolResult["quality"] {

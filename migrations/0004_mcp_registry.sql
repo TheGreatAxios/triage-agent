@@ -25,6 +25,7 @@ CREATE TABLE mcp_servers (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   project_id TEXT NOT NULL DEFAULT 'default',
   name TEXT NOT NULL,
+  description TEXT, -- Human-readable description for codemode/AI understanding
   enabled BOOLEAN DEFAULT true,
   config TEXT NOT NULL, -- JSON: {type, url, authEnvVar, timeout, tools}
   for_labels TEXT, -- JSON: ["bug", "request"] or NULL for all

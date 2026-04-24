@@ -125,8 +125,9 @@ export async function ingestUpdate(
       );
 
       let toolContext = "";
+      let toolResults: Array<{ tool: string; result: unknown; summary: string }> = [];
       if (mcpServers.length > 0) {
-        const toolResults = await executeTools(env, mcpServers, event.text);
+        toolResults = await executeTools(env, mcpServers, event.text);
         toolContext = formatToolContext(toolResults);
 
         logger.debug("MCP tools executed", {
@@ -136,7 +137,7 @@ export async function ingestUpdate(
         });
       }
 
-      await handleResponse(env, dbChatId, classification, dbMessageId, toolContext);
+      await handleResponse(env, dbChatId, classification, dbMessageId, toolContext, toolResults);
       trackPipelineMetrics({ chatId: event.chatId, stage: "respond", durationMs: Date.now() - respondStart, success: true });
     } catch (err) {
       trackPipelineMetrics({ chatId: event.chatId, stage: "respond", durationMs: Date.now() - respondStart, success: false });

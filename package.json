@@ -13,8 +13,12 @@
     "deploy": "bun run db:migrate:remote && wrangler deploy",
     "deploy:skip-migrate": "wrangler deploy",
     "types": "wrangler types",
+    "typecheck": "tsc --noEmit",
     "db:migrate:local": "wrangler d1 migrations apply triage-agent-db --local",
-    "db:migrate:remote": "wrangler d1 migrations apply triage-agent-db --remote"
+    "db:migrate:remote": "wrangler d1 migrations apply triage-agent-db --remote",
+    "mcp:add": "bun run scripts/add-mcp.ts",
+    "mcp:list": "bun run scripts/list-mcp.ts",
+    "mcp:remove": "bun run scripts/remove-mcp.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^1.2.12",
@@ -30,6 +34,7 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260424.1",
+    "bun-types": "^1.2.12",
     "typescript": "^5.9.3",
     "wrangler": "^4.85.0"
   }

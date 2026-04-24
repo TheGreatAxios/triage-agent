@@ -6,6 +6,8 @@ import { logger } from "../lib/logger";
 import { expirePendingApprovals } from "../lib/approval";
 import { sendDailySummary } from "../lib/slack";
 import { calculateAndStoreDailyStats } from "../lib/persistence";
+import { loadMCPServers, executeTools, formatToolContext } from "../lib/mcp";
+import { getRecentMessagesWithSenders } from "../lib/queries";
 
 /**
  * Process all fired timers (called from scheduled handler).
@@ -25,7 +27,36 @@ export async function processTimers(env: Env): Promise<number> {
       const classification = await getLatestClassification(env.DB, timer.chatId);
 
       if (classification) {
-        await handleResponse(env, timer.chatId, classification);
+        // Load and execute MCP tools for additional context (mirrors ingest.ts logic)
+        const mcpServers = await loadMCPServers(
+          env.DB,
+          "default",
+          classification.label,
+          classification.confidence
+        );
+
+        let toolContext = "";
+        if (mcpServers.length > 0) {
+          // Fetch latest message text for tool execution
+          const recentMessages = await getRecentMessagesWithSenders(env.DB, {
+            chatId: timer.chatId,
+            limit: 1,
+            order: "desc",
+          });
+          const latestMessageText = recentMessages[0]?.text ?? "";
+
+          const toolResults = await executeTools(env, mcpServers, latestMessageText);
+          toolContext = formatToolContext(toolResults);
+
+          logger.debug("MCP tools executed for timer", {
+            timerId: timer.id,
+            chatId: timer.chatId,
+            toolsUsed: toolResults.map((r) => r.tool).join(","),
+            resultsCount: toolResults.filter((r) => r.result).length,
+          });
+        }
+
+        await handleResponse(env, timer.chatId, classification, undefined, toolContext);
       } else {
         logger.warn("No classification found for timer chat", {
           timerId: timer.id,

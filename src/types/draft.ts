@@ -11,6 +11,12 @@ export interface Draft {
   confidence: number;
   /** Current status in the draft lifecycle */
   status: DraftStatus;
+  /** AI self-assessment of response quality (0–1) */
+  responseConfidence?: number;
+  /** Array of tool names that were invoked */
+  toolsUsed?: string[];
+  /** Summarized tool results */
+  toolResults?: Array<{ tool: string; summary: string }>;
 }
 
 export type DraftStatus = "pending" | "sent" | "escalated" | "discarded";
@@ -19,4 +25,8 @@ export type DraftStatus = "pending" | "sent" | "escalated" | "discarded";
 export interface PolicyDecision {
   action: ResponseAction;
   reason: string;
+  /** Classification confidence used in the decision (dual-confidence system) */
+  classificationConfidence?: number;
+  /** Draft/response confidence used in the decision (dual-confidence system) */
+  responseConfidence?: number;
 }
