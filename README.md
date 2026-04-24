@@ -368,4 +368,15 @@ curl -X POST "https://triage-agent.YOUR_SUBDOMAIN.workers.dev/webhook/telegram" 
 
 ## License
 
-MIT
+This project is currently **unlicensed** and considered **experimental**. While the source code is publicly available:
+
+- **Not free to sell** — This code may not be sold or commercially redistributed without explicit permission
+- **Subject to change** — The API, architecture, and functionality may change at any time without notice
+- **Use at your own risk** — No warranties or guarantees are provided. Use in production at your own discretion
+
+You are welcome to use, explore, and learn from this codebase.
+
+For inquiries, permissions, or questions about usage, please connect with me:
+
+- [LinkedIn](https://linkedin.com/in/sawyercutler)
+- [X (Twitter)](https://x.com/thegreataxios)
