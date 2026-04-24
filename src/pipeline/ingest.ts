@@ -2,12 +2,13 @@ import type { TelegramUpdate } from "../types/telegram";
 import type { InternalEvent } from "../types/events";
 import type { Env } from "../types/env";
 import { normalizeUpdate } from "../lib/normalizer";
-import { persistEvent, persistClassification } from "../lib/persistence";
+import { persistEvent, persistClassification, getChatByTelegramId } from "../lib/persistence";
 import { classifyMessage } from "../lib/classifier";
 import { updateConversationState, scheduleNoResponseTimer, cancelTimers } from "../lib/state";
 import { handleResponse } from "./respond";
 import { trackPipelineMetrics } from "../lib/metrics";
 import { logger } from "../lib/logger";
+import { handleBotAddedToChat, handleBotRemovedFromChat } from "../lib/approval";
 
 /**
  * Full ingestion pipeline: validate → normalize → persist.
@@ -17,6 +18,22 @@ export async function ingestUpdate(
   env: Env,
   update: TelegramUpdate
 ): Promise<InternalEvent | null> {
+  // Handle bot being added/removed from chats first
+  if (update.my_chat_member || update.chat_member) {
+    const wasAdded = await handleBotAddedToChat(env, update);
+    if (wasAdded) {
+      // Approval request sent, stop processing
+      return null;
+    }
+
+    const wasRemoved = await handleBotRemovedFromChat(env, update);
+    if (wasRemoved) {
+      // Chat removed, stop processing
+      return null;
+    }
+  }
+
+  // Check if update is processable as a message
   if (!isProcessableUpdate(update)) {
     logger.debug("Skipping non-processable update", { update_id: update.update_id });
     return null;
@@ -30,6 +47,17 @@ export async function ingestUpdate(
 
   const message = update.message ?? update.edited_message;
   if (!message) return null;
+
+  // APPROVAL GATE: Check if chat is approved before processing messages
+  const chatRecord = await getChatByTelegramId(env.DB, message.chat.id);
+  if (!chatRecord || chatRecord.approval_status !== "approved") {
+    logger.info("Ignoring message from unapproved chat", {
+      telegram_chat_id: message.chat.id,
+      chat_title: message.chat.title,
+      approval_status: chatRecord?.approval_status || "unknown",
+    });
+    return null; // Bot acts invisible in unapproved chats
+  }
 
   let dbChatId: number;
   let dbMessageId: number;

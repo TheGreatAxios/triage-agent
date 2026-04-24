@@ -2,7 +2,8 @@ import { Hono } from "hono";
 import type { AppEnv, Env } from "./types/env";
 import { webhook } from "./routes/webhook";
 import { health } from "./routes/health";
-import { processTimers } from "./pipeline/timer";
+import slackRoutes from "./routes/slack";
+import { processTimers, checkApprovalExpirations, sendDailySummaryIfScheduled } from "./pipeline/timer";
 import { archiveOldMessages } from "./lib/archiver";
 import { logger } from "./lib/logger";
 
@@ -17,6 +18,8 @@ app.use("/*", async (c, next) => {
   // Define explicitly allowed routes
   const allowedRoutes = [
     { path: "/webhook/telegram", methods: ["POST"] },
+    { path: "/webhook/slack/interactions", methods: ["POST"] },
+    { path: "/webhook/slack/commands", methods: ["POST"] },
     { path: "/health", methods: ["GET"] },
     { path: "/", methods: ["GET"] }, // Health check at root if needed
   ];
@@ -50,6 +53,7 @@ app.use("/*", async (c, next) => {
 });
 
 app.route("/webhook", webhook);
+app.route("/webhook/slack", slackRoutes);
 app.route("/", health);
 
 app.onError((err, c) => {
@@ -96,5 +100,35 @@ export default {
         });
       })
     );
+
+    // Check for expired pending approvals (72 hour timeout)
+    ctx.waitUntil(
+      checkApprovalExpirations(env).then((count) => {
+        if (count > 0) {
+          logger.info("Approval expiration check complete", { expired: count });
+        }
+      }).catch((err) => {
+        logger.error("Approval expiration check failed", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      })
+    );
+
+    // Determine which daily summary to send based on cron schedule
+    // 8 AM PST = 16:00 UTC (morning summary)
+    // 4 PM PST = 00:00 UTC next day (evening summary)
+    const hour = new Date().getUTCHours();
+    const period: "morning" | "evening" | null = hour === 16 ? "morning" : hour === 0 ? "evening" : null;
+
+    if (period) {
+      ctx.waitUntil(
+        sendDailySummaryIfScheduled(env, period).catch((err) => {
+          logger.error("Daily summary failed", {
+            period,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        })
+      );
+    }
   },
 };

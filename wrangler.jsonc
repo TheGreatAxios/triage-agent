@@ -24,7 +24,9 @@
 	],
 	"triggers": {
 		"crons": [
-			"*/5 * * * *"
+			"*/5 * * * *",    // Process timers every 5 minutes
+			"0 16 * * *",     // 8 AM PST (16:00 UTC) - Morning summary
+			"0 0 * * *"       // 4 PM PST (00:00 UTC next day) - Evening summary
 		]
 	},
 	"observability": {

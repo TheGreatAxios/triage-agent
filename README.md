@@ -2,6 +2,15 @@
 
 An AI-powered Cloudflare Worker that automatically ingests Telegram messages, classifies them (bug/request/normal), drafts AI responses, and escalates to Slack with Linear ticket creation for bugs and feature requests.
 
+## ✨ Key Features
+
+- **🔐 Chat Approval Flow**: All groups and DMs require manual Slack approval before the bot responds
+- **⏱️ 72-Hour Auto-Expiration**: Pending approvals expire with automatic chat departure
+- **🚫 Blacklist**: Rejected chats are blacklisted and auto-rejected if re-added
+- **📊 Daily Summaries**: Morning (8 AM PST) and evening (4 PM PST) activity reports
+- **🤖 AI Classification**: Rule-based + AI model fallback for message classification
+- **📝 Linear Integration**: Automatic triage issue creation for bugs and feature requests
+
 ## ⚡ Quick Start Checklist
 
 Before diving into full setup, here's the critical path:
@@ -9,9 +18,11 @@ Before diving into full setup, here's the critical path:
 1. **Get Bot Token** → Message [@BotFather](https://t.me/BotFather), create bot, copy token
 2. **Generate Secret** → `openssl rand -hex 16` (save this value!)
 3. **Deploy Worker** → `bun run deploy` (creates D1, R2 automatically)
-4. **Set Secrets** → `wrangler secret put TELEGRAM_BOT_TOKEN` and `TELEGRAM_WEBHOOK_SECRET` (use SAME secret from step 2)
-5. **Set Webhook** → Tell Telegram your worker URL + secret (must match step 4 exactly)
-6. **Test** → `wrangler tail` then send message to bot
+4. **Apply Migrations** → `bun run db:migrate:remote` (sets up approval tables)
+5. **Set Secrets** → `wrangler secret put TELEGRAM_BOT_TOKEN` and `TELEGRAM_WEBHOOK_SECRET` (use SAME secret from step 2)
+6. **Set Webhook** → Tell Telegram your worker URL + secret (must match step 4 exactly)
+7. **Configure Slack** → Create Slack app, set up webhooks and slash commands (see [Slack Setup](#slack-setup) below)
+8. **Test** → `wrangler tail` then add bot to a group (should trigger approval request)
 
 **⚠️ Most common failure:** Webhook secret in Cloudflare ≠ Webhook secret sent to Telegram. These must match exactly.
 
@@ -150,8 +161,17 @@ npx wrangler secret put TELEGRAM_BOT_TOKEN
 # Required - use the value you generated above
 npx wrangler secret put TELEGRAM_WEBHOOK_SECRET
 
-# Required for Slack escalation
+# Required for Slack escalation (existing feature)
 npx wrangler secret put SLACK_WEBHOOK_URL
+
+# Required for Slack approval flow (3 separate channels)
+npx wrangler secret put SLACK_APPROVAL_WEBHOOK_URL    # Approval requests channel
+npx wrangler secret put SLACK_SUMMARY_WEBHOOK_URL     # Daily summaries channel
+npx wrangler secret put SLACK_SIGNING_SECRET          # From Slack app Basic Info
+npx wrangler secret put SLACK_BOT_TOKEN               # xoxb- token from OAuth
+
+# Optional: Enable activation notifications (default: silent)
+npx wrangler secret put NOTIFY_ON_APPROVAL            # Set to "true" to notify
 
 # Required for Linear integration
 npx wrangler secret put LINEAR_API_KEY
@@ -206,6 +226,61 @@ npx wrangler secret list
 
 5. **Add your bot to a Telegram group** (or message it directly)
 
+### 6b. Slack Setup (Approval Flow)
+
+The approval flow requires a Slack app with interactive components. This enables manual approval of chats before the bot responds.
+
+#### Create Slack App
+
+1. Go to [api.slack.com/apps](https://api.slack.com/apps) → **Create New App**
+2. Choose "From scratch" → Name it "TriageBot Approvals" → Select your workspace
+
+#### Configure OAuth Scopes
+
+1. Go to **OAuth & Permissions**
+2. Add these **Bot Token Scopes**:
+   - `chat:write` - Post messages
+   - `commands` - Slash commands
+   - `users:read` - Resolve user mentions
+3. **Install to Workspace** and copy the **Bot User OAuth Token** (starts with `xoxb-`)
+4. Set this as `SLACK_BOT_TOKEN` in wrangler secrets
+
+#### Get Signing Secret
+
+1. Go to **Basic Information**
+2. Copy **Signing Secret** (under App Credentials)
+3. Set this as `SLACK_SIGNING_SECRET` in wrangler secrets
+
+#### Configure Interactivity
+
+1. Go to **Interactivity & Shortcuts** → Enable
+2. Set **Request URL**: `https://triage-agent.YOUR_SUBDOMAIN.workers.dev/webhook/slack/interactions`
+3. Save Changes
+
+#### Create Slash Commands
+
+Go to **Slash Commands** → Create New Command for each:
+
+| Command | Request URL | Description |
+|---------|-------------|-------------|
+| `/pending-chats` | `https://triage-agent.YOUR_SUBDOMAIN.workers.dev/webhook/slack/commands` | List pending approvals |
+| `/batch-approve` | Same as above | Batch approve multiple chats |
+| `/batch-reject` | Same as above | Batch reject multiple chats |
+| `/rejected-chats` | Same as above | View blacklisted chats |
+
+#### Set Up Webhook Channels
+
+Create three Slack channels (or use existing ones):
+
+1. **#triage-escalations** - For message escalations (existing `SLACK_WEBHOOK_URL`)
+2. **#triage-approvals** - For approval requests (`SLACK_APPROVAL_WEBHOOK_URL`)
+3. **#triage-summaries** - For daily stats (`SLACK_SUMMARY_WEBHOOK_URL`)
+
+Get webhook URLs:
+1. In each channel: `/add apps` → Add **Incoming Webhooks**
+2. Or use Slack app → **Incoming Webhooks** → Add New Webhook to Workspace
+3. Copy each webhook URL and set as corresponding secret
+
 ### 7. Verify Deployment
 
 ```bash
@@ -215,6 +290,81 @@ curl https://telegram-triage-agent.YOUR_SUBDOMAIN.workers.dev/health
 # View live logs
 npx wrangler tail
 ```
+
+## Approval Flow System
+
+The approval flow ensures the bot only operates in explicitly approved chats. This prevents unauthorized usage and gives you control over where the bot is active.
+
+### How It Works
+
+```
+Bot Added to Chat
+       ↓
+Check Blacklist ──Blacklisted?──→ Auto-reject & Leave
+       ↓ No
+Check Existing ──Approved?──→ Silent activation
+       ↓ No
+Create Pending Approval
+       ↓
+Send Slack Request (minimal or rich view)
+       ↓
+Wait for Admin Decision (72 hours max)
+       ↓
+   ┌──────────┬──────────┬──────────┐
+   ▼          ▼          ▼          ▼
+ Approved   Rejected   Expired   Unblacklist
+   ↓          ↓          ↓          ↓
+ Activate  Blacklist   Leave    New request
++ Notify?   + Leave    + Notify
+```
+
+### Adaptive Context Views
+
+The approval request uses **complexity scoring** to determine view richness:
+
+| Factor | Weight | Threshold |
+|--------|--------|-----------|
+| Member count | 30% | >10 triggers rich view |
+| Message density | 25% | >5 msg/hour adds weight |
+| Urgency signals | 25% | Keywords like "urgent", "broken" |
+| Questions | 10% | Presence of `?` |
+| Code/links | 10% | Code blocks or URLs |
+| Prior summary | +15% boost | Previous chat history |
+
+**Rich view** (>0.6 complexity, >10 members, or prior summary):
+- Shows recent messages (max 5, token-aware)
+- Displays prior chat summary if available
+- Lists complexity factors
+
+**Minimal view** (low complexity):
+- Basic metadata only
+- Faster to scan for batch operations
+
+### Slack Commands
+
+| Command | Usage | Description |
+|---------|-------|-------------|
+| `/pending-chats` | `/pending-chats [filter]` | List pending approvals. Filters: `all`, `groups`, `dms`, `recent`, `rich` |
+| `/batch-approve` | `/batch-approve` | Open modal to approve multiple chats at once |
+| `/batch-reject` | `/batch-reject` | Open modal to reject multiple chats at once |
+| `/rejected-chats` | `/rejected-chats [all]` | View blacklisted chats. Use `all` to see more than 10 |
+
+### Configuration
+
+| Environment Variable | Default | Description |
+|---------------------|---------|-------------|
+| `NOTIFY_ON_APPROVAL` | `false` | Send Telegram message when approved (`true`/`false`) |
+| Approval expiration | 72 hours | Hard-coded, sends warning before leaving |
+
+### Database Schema
+
+The approval system uses these tables (see `migrations/0002_chat_approval.sql`):
+
+- `chats` - Added `approval_status`, `is_blacklisted`, timestamps
+- `pending_approvals` - Queue with complexity scores and expiration
+- `chat_membership_history` - Audit log of add/remove/approve/reject events
+- `daily_stats` - Aggregated statistics for summaries
+- `app_config` - Bot metadata cache
 
 ## Configuration
 
@@ -263,26 +413,40 @@ src/
   routes/
     webhook.ts          # POST /webhook/telegram
     health.ts           # GET /health
+    slack.ts            # Slack interactions & slash commands
   pipeline/
-    ingest.ts           # Full ingest pipeline
+    ingest.ts           # Full ingest pipeline (with approval gate)
     respond.ts          # Draft → policy → action
-    timer.ts            # Scheduled timer processing
+    timer.ts            # Scheduled timer + approval expiration + daily summaries
   lib/
     ai.ts               # AI provider routing
+    approval.ts         # Core approval flow logic
     classifier.ts       # Rule + AI classification
     config.ts           # Policy thresholds
     drafter.ts          # Draft generation
     escalation.ts       # Slack escalation
     linear.ts           # Linear issue creation
-    persistence.ts      # D1 operations
+    persistence.ts      # D1 operations (includes approval queries)
     archiver.ts         # R2 archival
+    slack.ts            # Slack API + verification
+    slack-blocks.ts     # Block Kit UI builders
     state.ts            # Conversation state & timers
+    telegram-api.ts     # Telegram Bot API helpers
     rate-limiter.ts     # Per-chat rate limiting
-    telegram.ts         # Bot API helpers
+    telegram.ts         # Webhook verification
     logger.ts           # Structured logging
     metrics.ts          # Pipeline timing
   types/                # TypeScript types
+    approval.ts         # Approval flow types
+    classification.ts   # Classification types
+    draft.ts            # Draft/response types
+    env.ts              # Environment bindings
+    escalation.ts       # Escalation types
+    events.ts           # Internal event types
+    telegram.ts         # Telegram API types
 migrations/             # D1 schema migrations
+  0001_initial_schema.sql
+  0002_chat_approval.sql
 ```
 
 ## How It Works
@@ -365,6 +529,17 @@ curl -X POST "https://triage-agent.YOUR_SUBDOMAIN.workers.dev/webhook/telegram" 
 ```
 
 **Expected:** `{"ok":true}` and logs appear in `wrangler tail`
+
+### Approval Flow Troubleshooting
+
+| Issue | Solution |
+|-------|----------|
+| No approval request in Slack | Check `SLACK_APPROVAL_WEBHOOK_URL` is set. Verify bot was added to group (not just messaged directly). Check `wrangler tail` for errors. |
+| Slack signature invalid | Ensure `SLACK_SIGNING_SECRET` matches your Slack app's Basic Info → Signing Secret. |
+| Slash commands not working | Verify Request URL in Slack app points to `/webhook/slack/commands`. Check command is installed to workspace. |
+| Can't approve/reject | Ensure `SLACK_BOT_TOKEN` has `chat:write` scope and is installed to the correct workspace. |
+| Bot not leaving rejected chats | Check `TELEGRAM_BOT_TOKEN` is correct. Bot must be admin to leave groups. |
+| Daily summaries not sending | Verify `SLACK_SUMMARY_WEBHOOK_URL`. Check cron triggers are configured in `wrangler.jsonc`. |
 
 ## License
 

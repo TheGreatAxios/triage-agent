@@ -17,6 +17,15 @@ export interface Env {
   LINEAR_LABEL_BUG?: string;
   LINEAR_LABEL_REQUEST?: string;
 
+  // Slack Approval Flow (3 channels)
+  SLACK_APPROVAL_WEBHOOK_URL: string;  // Approval requests channel
+  SLACK_SUMMARY_WEBHOOK_URL: string;   // Daily summaries channel
+  SLACK_SIGNING_SECRET: string;         // Verify Slack interactions
+  SLACK_BOT_TOKEN: string;              // Post messages, open modals
+
+  // Bot Configuration
+  NOTIFY_ON_APPROVAL?: string;          // "true" to send activation message (default: silent)
+
   // AI Providers (all optional - only set what you use)
   // Official SDK Providers
   ANTHROPIC_API_KEY?: string;      // Claude models

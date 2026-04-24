@@ -3,6 +3,9 @@ import type { ClassificationResult } from "../types/classification";
 import { getFiredTimers, markTimerFired } from "../lib/state";
 import { handleResponse } from "./respond";
 import { logger } from "../lib/logger";
+import { expirePendingApprovals } from "../lib/approval";
+import { sendDailySummary } from "../lib/slack";
+import { calculateAndStoreDailyStats } from "../lib/persistence";
 
 /**
  * Process all fired timers (called from scheduled handler).
@@ -87,4 +90,63 @@ async function getLatestClassification(
     method: row.method as ClassificationResult["method"],
     reasoning: "From latest classification",
   };
+}
+
+/**
+ * Check and expire pending approvals past 72 hours.
+ * Called from scheduled handler.
+ */
+export async function checkApprovalExpirations(env: Env): Promise<number> {
+  try {
+    const count = await expirePendingApprovals(env);
+    if (count > 0) {
+      logger.info("Expired pending approvals", { count });
+    }
+    return count;
+  } catch (err) {
+    logger.error("Failed to check approval expirations", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return 0;
+  }
+}
+
+/**
+ * Send daily summary for the specified period.
+ * Called from scheduled handler at 8am PST (morning) and 4pm PST (evening).
+ */
+export async function sendDailySummaryIfScheduled(
+  env: Env,
+  period: "morning" | "evening"
+): Promise<void> {
+  try {
+    const now = new Date();
+    const dateStr = now.toISOString().split("T")[0];
+
+    // Calculate and store stats
+    const stats = await calculateAndStoreDailyStats(env.DB, dateStr, period);
+
+    // Send to Slack
+    await sendDailySummary(env.SLACK_SUMMARY_WEBHOOK_URL, {
+      date: dateStr,
+      period,
+      totalChats: stats.totalChats,
+      approvedChats: stats.approvedChats,
+      pendingChats: stats.pendingChats,
+      rejectedChats: stats.rejectedChats,
+      expiredChats: stats.expiredChats,
+      blacklistedChats: stats.blacklistedChats,
+      totalMessages: stats.totalMessages,
+      uniqueUsers: stats.uniqueUsers,
+      activeChats: stats.activeChats,
+      approvalDecisions: stats.approvalDecisions,
+    });
+
+    logger.info("Daily summary sent", { date: dateStr, period });
+  } catch (err) {
+    logger.error("Failed to send daily summary", {
+      period,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }

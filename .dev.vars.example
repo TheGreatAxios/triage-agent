@@ -2,8 +2,22 @@
 TELEGRAM_BOT_TOKEN=your-bot-token
 TELEGRAM_WEBHOOK_SECRET=your-webhook-secret
 
-# Required Slack
+# Required Slack (Escalations - existing feature)
 SLACK_WEBHOOK_URL=https://hooks.slack.com/services/xxx/yyy/zzz
+
+# Required Slack (Approval Flow - new feature)
+# Create 3 separate channels for different purposes:
+# 1. Approval requests (where admin approves/rejects)
+SLACK_APPROVAL_WEBHOOK_URL=https://hooks.slack.com/services/xxx/yyy/zzz
+# 2. Daily summaries (morning/evening stats)
+SLACK_SUMMARY_WEBHOOK_URL=https://hooks.slack.com/services/xxx/yyy/zzz
+# 3. Get from Slack app → Basic Info → Signing Secret
+SLACK_SIGNING_SECRET=your-signing-secret
+# 4. Get from Slack app → OAuth & Permissions → Bot User OAuth Token
+SLACK_BOT_TOKEN=xoxb-your-bot-token
+
+# Optional: Send Telegram message when approved (default: silent)
+# NOTIFY_ON_APPROVAL=true
 
 # Linear Integration (required for triage issue creation)
 LINEAR_API_KEY=lin_api_xxx
