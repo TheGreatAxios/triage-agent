@@ -1,6 +1,7 @@
 import type { Env } from "../types/env";
 import type { ClassificationLabel } from "../types/classification";
 import { logger } from "./logger";
+import { getErrorMessage } from "./errors";
 
 const LINEAR_API_URL = "https://api.linear.app/graphql";
 
@@ -125,7 +126,7 @@ export async function createTriageIssue(
     return { issueId: result.issue.id, issueUrl: result.issue.url };
   } catch (err) {
     logger.error("Linear API error", {
-      error: err instanceof Error ? err.message : String(err),
+      error: getErrorMessage(err),
     });
     return null;
   }

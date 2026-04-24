@@ -7,7 +7,7 @@ import { getOrRefreshSummary } from "./summary";
 import { evaluateResponsePolicy } from "./config";
 import { logger } from "./logger";
 import { getRecentMessagesWithSenders, buildMessageContext } from "./queries";
-import { DatabaseError, AIError } from "./errors";
+import { DatabaseError, AIError, getErrorMessage } from "./errors";
 import { sanitizeContextInput } from "./sanitize";
 import { validateLinks, sanitizeInvalidLinks } from "./links";
 
@@ -188,7 +188,7 @@ async function generateStructuredDraft(env: Env, context: string): Promise<Struc
       "workers-ai",
       "@cf/meta/llama-3.1-8b-instruct",
       "draft",
-      { originalError: err instanceof Error ? err.message : String(err) }
+      { originalError: getErrorMessage(err) }
     );
     logger.error(error.message, error.toJSON());
     return {
@@ -275,7 +275,7 @@ async function persistDraft(
       `Failed to persist draft for chat ${chatId}`,
       "INSERT",
       "drafts",
-      { chatId, error: err instanceof Error ? err.message : String(err) }
+      { chatId, error: getErrorMessage(err) }
     );
   }
 }
@@ -323,7 +323,7 @@ export async function sendTelegramMessage(
     return true;
   } catch (err) {
     logger.error("Telegram sendMessage error", {
-      error: err instanceof Error ? err.message : String(err),
+      error: getErrorMessage(err),
     });
     return false;
   }

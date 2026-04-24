@@ -14,6 +14,7 @@ import type {
 } from "../types/approval";
 import type { Env } from "../types/env";
 import { logger } from "./logger";
+import { getErrorMessage } from "./errors";
 import {
   leaveChat,
   sendMessage,
@@ -349,7 +350,7 @@ export async function handleBotAddedToChat(
   } catch (err) {
     logger.error("Failed to send approval request to Slack", {
       pending_approval_id: pendingApproval.id,
-      error: err instanceof Error ? err.message : String(err),
+      error: getErrorMessage(err),
     });
   }
 
@@ -475,7 +476,7 @@ export async function approveChat(
   } catch (err) {
     logger.error("Error approving chat", {
       chat_id: chatId,
-      error: err instanceof Error ? err.message : String(err),
+      error: getErrorMessage(err),
     });
     return { success: false, message: "Internal error during approval" };
   }
@@ -551,7 +552,7 @@ export async function rejectChat(
   } catch (err) {
     logger.error("Error rejecting chat", {
       chat_id: chatId,
-      error: err instanceof Error ? err.message : String(err),
+      error: getErrorMessage(err),
     });
     return { success: false, message: "Internal error during rejection" };
   }
@@ -623,7 +624,7 @@ export async function unblacklistChat(
   } catch (err) {
     logger.error("Error unblacklisting chat", {
       chat_id: chatId,
-      error: err instanceof Error ? err.message : String(err),
+      error: getErrorMessage(err),
     });
     return { success: false, message: "Internal error during unblacklist" };
   }
@@ -738,7 +739,7 @@ export async function expirePendingApprovals(env: Env): Promise<number> {
     } catch (err) {
       logger.error("Error expiring approval", {
         pending_id: pending.id,
-        error: err instanceof Error ? err.message : String(err),
+        error: getErrorMessage(err),
       });
     }
   }

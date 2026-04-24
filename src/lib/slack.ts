@@ -2,6 +2,7 @@
 
 import type { PendingApproval, PriorChatSummary } from "../types/approval";
 import { logger } from "./logger";
+import { getErrorMessage } from "./errors";
 import { buildMinimalApprovalBlocks, buildRichApprovalBlocks, buildDecisionBlocks } from "./slack-blocks";
 
 /**
@@ -51,7 +52,7 @@ export async function verifySlackRequestAsync(
     return computed === signature;
   } catch (err) {
     logger.error("Slack signature verification error", {
-      error: err instanceof Error ? err.message : String(err),
+      error: getErrorMessage(err),
     });
     return false;
   }
@@ -91,7 +92,7 @@ export async function sendApprovalRequestToSlack(
   } catch (err) {
     logger.error("Failed to send Slack approval request", {
       pending_id: approval.id,
-      error: err instanceof Error ? err.message : String(err),
+      error: getErrorMessage(err),
     });
     throw err;
   }
@@ -134,7 +135,7 @@ export async function postSlackMessage(
     return { ts: data.ts || null, channel: data.channel || null };
   } catch (err) {
     logger.error("Failed to post Slack message", {
-      error: err instanceof Error ? err.message : String(err),
+      error: getErrorMessage(err),
     });
     return { ts: null, channel: null };
   }
@@ -182,7 +183,7 @@ export async function updateSlackMessageWithDecision(
     return true;
   } catch (err) {
     logger.error("Error updating Slack message", {
-      error: err instanceof Error ? err.message : String(err),
+      error: getErrorMessage(err),
     });
     return false;
   }
@@ -306,7 +307,7 @@ export async function openBatchApprovalModal(
     return true;
   } catch (err) {
     logger.error("Error opening batch modal", {
-      error: err instanceof Error ? err.message : String(err),
+      error: getErrorMessage(err),
     });
     return false;
   }
@@ -467,7 +468,7 @@ export async function sendBatchApprovalCompleteNotification(
     await postSlackMessage(botToken, channelId, text, blocks);
   } catch (err) {
     logger.error("Failed to send batch completion notification", {
-      error: err instanceof Error ? err.message : String(err),
+      error: getErrorMessage(err),
     });
   }
 }
@@ -590,7 +591,7 @@ export async function sendDailySummary(
     });
   } catch (err) {
     logger.error("Failed to send daily summary", {
-      error: err instanceof Error ? err.message : String(err),
+      error: getErrorMessage(err),
     });
   }
 }

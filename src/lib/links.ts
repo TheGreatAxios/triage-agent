@@ -5,6 +5,7 @@
 
 import { logger } from "./logger";
 import { getConfig } from "./config";
+import { getErrorMessage } from "./errors";
 
 interface LinkCheckResult {
   url: string;
@@ -82,7 +83,7 @@ async function checkLink(
     // HEAD threw (network error, timeout, etc.) - fall back to GET
     logger.debug("HEAD request threw, falling back to GET", {
       url,
-      error: err instanceof Error ? err.message : String(err),
+      error: getErrorMessage(err),
     });
   }
 
@@ -115,7 +116,7 @@ async function checkLink(
     };
   } catch (err) {
     // Check if it's an abort error from our intentional abort after headers
-    const errorMessage = err instanceof Error ? err.message : String(err);
+    const errorMessage = getErrorMessage(err);
     const isAbortError =
       errorMessage.includes("abort") || errorMessage.includes("Abort");
 

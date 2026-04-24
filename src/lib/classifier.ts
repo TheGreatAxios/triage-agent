@@ -4,6 +4,7 @@ import type { ClassificationResult, ClassificationLabel } from "../types/classif
 import type { Env } from "../types/env";
 import { getModel } from "./ai";
 import { logger } from "./logger";
+import { getErrorMessage } from "./errors";
 import { sanitizePromptInput } from "./sanitize";
 
 interface Rule {
@@ -195,7 +196,7 @@ async function classifyByModel(
   } catch (err) {
     logger.error("Model fallback failed", {
       messageId: event.messageId,
-      error: err instanceof Error ? err.message : String(err),
+      error: getErrorMessage(err),
     });
   }
 

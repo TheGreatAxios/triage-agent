@@ -5,6 +5,7 @@ import { verifyTelegramWebhook } from "../lib/telegram";
 import { checkRateLimit } from "../lib/rate-limiter";
 import { ingestUpdate } from "../pipeline/ingest";
 import { logger } from "../lib/logger";
+import { getErrorMessage } from "../lib/errors";
 
 /**
  * Telegram webhook handler.
@@ -62,7 +63,7 @@ webhook.post("/telegram", async (c) => {
     ingestUpdate(c.env, update).catch((err) => {
       logger.error("Ingestion pipeline error", {
         update_id: update.update_id,
-        error: err instanceof Error ? err.message : String(err),
+        error: getErrorMessage(err),
       });
     })
   );

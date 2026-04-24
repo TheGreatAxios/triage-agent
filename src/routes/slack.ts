@@ -4,6 +4,7 @@ import { Hono } from "hono";
 import type { AppEnv } from "../types/env";
 import type { ApprovalSlackPayload } from "../types/approval";
 import { logger } from "../lib/logger";
+import { getErrorMessage } from "../lib/errors";
 import { verifySlackRequestAsync } from "../lib/slack";
 import {
   approveChat,
@@ -207,7 +208,7 @@ slackRoutes.post("/interactions", async (c) => {
     c.executionCtx.waitUntil(
       batchProcessApprovals(c.env, decisions).catch((err) => {
         logger.error("Batch approval failed", {
-          error: err instanceof Error ? err.message : String(err),
+          error: getErrorMessage(err),
         });
       })
     );
@@ -283,7 +284,7 @@ slackRoutes.post("/commands", async (c) => {
         }),
       }).catch((err) => {
         logger.error("Failed to send pending chats response", {
-          error: err instanceof Error ? err.message : String(err),
+          error: getErrorMessage(err),
         });
       })
     );
@@ -391,7 +392,7 @@ slackRoutes.post("/commands", async (c) => {
         }),
       }).catch((err) => {
         logger.error("Failed to send rejected chats response", {
-          error: err instanceof Error ? err.message : String(err),
+          error: getErrorMessage(err),
         });
       })
     );

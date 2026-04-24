@@ -8,6 +8,7 @@ import { sendDailySummary } from "../lib/slack";
 import { calculateAndStoreDailyStats } from "../lib/persistence";
 import { loadMCPServers, executeTools, formatToolContext } from "../lib/mcp";
 import { getRecentMessagesWithSenders } from "../lib/queries";
+import { getErrorMessage } from "../lib/errors";
 
 /**
  * Process all fired timers (called from scheduled handler).
@@ -76,7 +77,7 @@ export async function processTimers(env: Env): Promise<number> {
       logger.error("Timer processing failed", {
         timerId: timer.id,
         chatId: timer.chatId,
-        error: err instanceof Error ? err.message : String(err),
+        error: getErrorMessage(err),
       });
     }
   }

@@ -148,6 +148,14 @@ export class NotFoundError extends TriageAgentError {
 }
 
 /**
+ * Extract a human-readable message from an unknown error.
+ * Use this instead of repeating `err instanceof Error ? err.message : String(err)`
+ */
+export function getErrorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/**
  * Type guard to check if an error is a TriageAgentError.
  */
 export function isTriageAgentError(error: unknown): error is TriageAgentError {

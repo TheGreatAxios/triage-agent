@@ -3,6 +3,7 @@
 import type { BotMetadata } from "../types/approval";
 import type { TelegramUser, TelegramChat } from "../types/telegram";
 import { logger } from "./logger";
+import { getErrorMessage } from "./errors";
 
 const TELEGRAM_API_BASE = "https://api.telegram.org/bot";
 
@@ -42,7 +43,7 @@ export async function getBotMetadata(botToken: string): Promise<BotMetadata | nu
     };
   } catch (err) {
     logger.error("Error fetching bot metadata", {
-      error: err instanceof Error ? err.message : String(err),
+      error: getErrorMessage(err),
     });
     return null;
   }
@@ -78,7 +79,7 @@ export async function leaveChat(
   } catch (err) {
     logger.error("Error leaving chat", {
       telegram_chat_id: telegramChatId,
-      error: err instanceof Error ? err.message : String(err),
+      error: getErrorMessage(err),
     });
     return false;
   }
@@ -125,7 +126,7 @@ export async function sendMessage(
   } catch (err) {
     logger.error("Error sending message", {
       telegram_chat_id: telegramChatId,
-      error: err instanceof Error ? err.message : String(err),
+      error: getErrorMessage(err),
     });
     return false;
   }
@@ -159,7 +160,7 @@ export async function getChat(
   } catch (err) {
     logger.error("Error getting chat info", {
       telegram_chat_id: telegramChatId,
-      error: err instanceof Error ? err.message : String(err),
+      error: getErrorMessage(err),
     });
     return null;
   }
@@ -193,7 +194,7 @@ export async function getChatMemberCount(
   } catch (err) {
     logger.error("Error getting member count", {
       telegram_chat_id: telegramChatId,
-      error: err instanceof Error ? err.message : String(err),
+      error: getErrorMessage(err),
     });
     return null;
   }

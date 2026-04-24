@@ -9,7 +9,8 @@ import { handleResponse } from "./respond";
 import { trackPipelineMetrics } from "../lib/metrics";
 import { logger } from "../lib/logger";
 import { handleBotAddedToChat, handleBotRemovedFromChat } from "../lib/approval";
-import { loadMCPServers, executeTools, formatToolContext } from "../lib/mcp";
+import { getErrorMessage } from "../lib/errors";
+import { loadMCPServers, executeTools, formatToolContext, type ToolResult } from "../lib/mcp";
 
 /**
  * Full ingestion pipeline: validate → normalize → persist.
@@ -73,7 +74,7 @@ export async function ingestUpdate(
     trackPipelineMetrics({ chatId: event.chatId, stage: "persist", durationMs: Date.now() - persistStart, success: false });
     logger.error("Failed to persist event", {
       update_id: event.id,
-      error: err instanceof Error ? err.message : String(err),
+      error: getErrorMessage(err),
     });
     throw err;
   }
@@ -88,7 +89,7 @@ export async function ingestUpdate(
   } catch (err) {
     logger.error("Failed to update conversation state", {
       update_id: event.id,
-      error: err instanceof Error ? err.message : String(err),
+      error: getErrorMessage(err),
     });
   }
 
@@ -102,7 +103,7 @@ export async function ingestUpdate(
     trackPipelineMetrics({ chatId: event.chatId, stage: "classify", durationMs: Date.now() - classifyStart, success: false });
     logger.error("Failed to classify message", {
       update_id: event.id,
-      error: err instanceof Error ? err.message : String(err),
+      error: getErrorMessage(err),
     });
   }
 
@@ -125,7 +126,7 @@ export async function ingestUpdate(
       );
 
       let toolContext = "";
-      let toolResults: Array<{ tool: string; result: unknown; summary: string }> = [];
+      let toolResults: ToolResult[] = [];
       if (mcpServers.length > 0) {
         toolResults = await executeTools(env, mcpServers, event.text);
         toolContext = formatToolContext(toolResults);
@@ -143,7 +144,7 @@ export async function ingestUpdate(
       trackPipelineMetrics({ chatId: event.chatId, stage: "respond", durationMs: Date.now() - respondStart, success: false });
       logger.error("Failed to handle response for bug/request", {
         update_id: event.id,
-        error: err instanceof Error ? err.message : String(err),
+        error: getErrorMessage(err),
       });
     }
   } else if (classification.label === "normal") {
@@ -153,7 +154,7 @@ export async function ingestUpdate(
     } catch (err) {
       logger.error("Failed to schedule timer for normal message", {
         update_id: event.id,
-        error: err instanceof Error ? err.message : String(err),
+        error: getErrorMessage(err),
       });
     }
   }

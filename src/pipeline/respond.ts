@@ -9,6 +9,7 @@ import {
 } from "../lib/escalation";
 import { createTriageIssue, persistLinearLink } from "../lib/linear";
 import { logger } from "../lib/logger";
+import { getErrorMessage } from "../lib/errors";
 
 /**
  * Full response pipeline: generate draft → evaluate policy → act.
@@ -112,7 +113,7 @@ export async function handleResponse(
     } catch (err) {
       logger.error("Linear triage issue creation failed", {
         chatId,
-        error: err instanceof Error ? err.message : String(err),
+        error: getErrorMessage(err),
       });
     }
   }

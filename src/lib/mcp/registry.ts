@@ -24,10 +24,14 @@ export interface MCPServerConfig {
 
 export interface ToolResult {
   tool: string;
-  result?: unknown;
+  /** Result data (present on success, undefined on error) */
+  result: unknown;
+  /** Error message (present on failure, undefined on success) */
   error?: string;
   fromCache?: boolean;
   quality: "high" | "medium" | "low" | "none";
+  /** Summary of the result for persistence (auto-generated from result) */
+  summary: string;
 }
 
 /**

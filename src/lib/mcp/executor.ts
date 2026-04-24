@@ -4,6 +4,7 @@
 import type { Env } from "../../types/env";
 import type { MCPServerConfig, ToolResult } from "./registry";
 import { logger } from "../logger";
+import { getErrorMessage } from "../errors";
 
 const DEFAULT_TIMEOUTS: Record<string, number> = {
   parallel: 5000,
@@ -52,11 +53,13 @@ async function executeSingleTool(
     const cached = await env.KNOWLEDGE_CACHE?.get(cacheKey);
     if (cached) {
       const body = await cached.text();
+      const result = JSON.parse(body);
       return {
         tool: config.name,
-        result: JSON.parse(body),
+        result,
         fromCache: true,
         quality: "high",
+        summary: generateSummary(result),
       };
     }
 
@@ -90,18 +93,21 @@ async function executeSingleTool(
       result,
       fromCache: false,
       quality: assessQuality(config.name, result),
+      summary: generateSummary(result),
     };
   } catch (err) {
     clearTimeout(timeoutId);
-    const error = err instanceof Error ? err.message : String(err);
+    const error = getErrorMessage(err);
     logger.warn(`Tool execution failed: ${config.name}`, { error: error.slice(0, 200) });
 
     await logExecution(env.DB, config, query, null, Date.now() - startTime, false);
 
     return {
       tool: config.name,
+      result: null,
       error,
       quality: "none",
+      summary: `Error: ${error.slice(0, 100)}`,
     };
   }
 }
@@ -160,9 +166,8 @@ async function executeREST(
 
 async function cacheResult(env: Env, key: string, result: unknown): Promise<void> {
   try {
-    await env.KNOWLEDGE_CACHE?.put(key, JSON.stringify(result), {
-      expirationTtl: 86400 * 2, // 48 hours
-    });
+    // Store without expiration - bucket lifecycle rules handle cleanup
+    await env.KNOWLEDGE_CACHE?.put(key, JSON.stringify(result));
   } catch (err) {
     logger.debug("Cache write failed (non-critical)", { key, error: String(err) });
   }
@@ -243,6 +248,17 @@ function fnv1a64(data: Uint8Array): string {
 
   // Return 16-character hex (64 bits)
   return hash.toString(16).padStart(16, "0");
+}
+
+/**
+ * Generate a brief summary of tool result for persistence.
+ * Truncated to avoid storing large results in D1.
+ */
+function generateSummary(result: unknown): string {
+  if (!result) return "No result";
+  const str = JSON.stringify(result);
+  // Truncate to 200 chars for D1 storage efficiency
+  return str.length > 200 ? str.slice(0, 197) + "..." : str;
 }
 
 function assessQuality(toolName: string, result: unknown): ToolResult["quality"] {

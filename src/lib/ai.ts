@@ -9,6 +9,7 @@ import { createXai } from "@ai-sdk/xai";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { logger } from "./logger";
+import { getErrorMessage } from "./errors";
 
 export type AIProvider =
   | "workers-ai"
@@ -125,7 +126,7 @@ export function getModel(env: Env, task: AITask): LanguageModel {
       logger.warn(`Tier ${tier} failed, trying next`, {
         task,
         provider: config.provider,
-        error: err instanceof Error ? err.message : String(err),
+        error: getErrorMessage(err),
       });
     }
   }

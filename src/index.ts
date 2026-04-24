@@ -6,6 +6,7 @@ import slackRoutes from "./routes/slack";
 import { processTimers, checkApprovalExpirations, sendDailySummaryIfScheduled } from "./pipeline/timer";
 import { archiveOldMessages } from "./lib/archiver";
 import { logger } from "./lib/logger";
+import { getErrorMessage } from "./lib/errors";
 
 const app = new Hono<AppEnv>();
 
@@ -58,7 +59,7 @@ app.route("/", health);
 
 app.onError((err, c) => {
   logger.error("Unhandled error", {
-    error: err instanceof Error ? err.message : String(err),
+    error: getErrorMessage(err),
     path: c.req.path,
     method: c.req.method,
   });
@@ -84,7 +85,7 @@ export default {
         }
       }).catch((err) => {
         logger.error("Scheduled timer run failed", {
-          error: err instanceof Error ? err.message : String(err),
+          error: getErrorMessage(err),
         });
       })
     );
@@ -96,7 +97,7 @@ export default {
         }
       }).catch((err) => {
         logger.error("Archival run failed", {
-          error: err instanceof Error ? err.message : String(err),
+          error: getErrorMessage(err),
         });
       })
     );
@@ -109,7 +110,7 @@ export default {
         }
       }).catch((err) => {
         logger.error("Approval expiration check failed", {
-          error: err instanceof Error ? err.message : String(err),
+          error: getErrorMessage(err),
         });
       })
     );
@@ -125,7 +126,7 @@ export default {
         sendDailySummaryIfScheduled(env, period).catch((err) => {
           logger.error("Daily summary failed", {
             period,
-            error: err instanceof Error ? err.message : String(err),
+            error: getErrorMessage(err),
           });
         })
       );

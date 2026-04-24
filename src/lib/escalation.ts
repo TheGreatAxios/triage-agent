@@ -2,7 +2,7 @@ import type { ClassificationResult } from "../types/classification";
 import type { EscalationStatus } from "../types/escalation";
 import { logger } from "./logger";
 import { getFormattedMessagesForEscalation } from "./queries";
-import { APIError, DatabaseError } from "./errors";
+import { APIError, DatabaseError, getErrorMessage } from "./errors";
 
 export interface EscalationContext {
   chatId: number;
@@ -157,7 +157,7 @@ async function sendSlackNotification(
       "Slack webhook request failed",
       "slack",
       undefined,
-      { originalError: err instanceof Error ? err.message : String(err) }
+      { originalError: getErrorMessage(err) }
     );
     logger.error(error.message, error.toJSON());
     return false;
@@ -202,7 +202,7 @@ async function persistEscalation(
       `Failed to persist escalation for chat ${chatId}`,
       "INSERT",
       "escalations",
-      { chatId, draftId, error: err instanceof Error ? err.message : String(err) }
+      { chatId, draftId, error: getErrorMessage(err) }
     );
   }
 }

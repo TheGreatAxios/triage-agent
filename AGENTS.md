@@ -84,15 +84,45 @@ migrations/
 
 ## Response Policy
 
-- **auto_send (normal):** classification confidence ≥ 0.85 AND label in `autoSendLabels` (e.g., "normal")
-- **auto_send (bug/request):** classification confidence > 0.8 AND response confidence > 0.875 — bug and feature request classifications can now auto-send if both thresholds are met
-- **escalate:** classification confidence < 0.4 OR label is "unknown"
-- **draft_only:** everything in between
+The response policy determines how the agent handles classified messages. The system uses **dual-confidence evaluation** for sensitive classifications (bugs and feature requests).
 
-Dual-confidence thresholds for sensitive classifications (bug, feature_request):
-- Classification confidence must be > 0.8 (high certainty of issue type)
-- Response confidence must be > 0.875 (very high certainty of response quality)
-- Both must be satisfied for auto-send; otherwise escalates to human review
+### Policy Actions
+
+| Action | Trigger | Behavior |
+|--------|---------|----------|
+| **auto_send** | Normal: confidence ≥ 0.85 AND label in `autoSendLabels` | Send draft immediately to Telegram |
+| **auto_send** | Bug/Request: classification > 0.8 AND response > 0.875 | Send draft immediately (dual-confidence) |
+| **escalate** | confidence < 0.4 OR label is "unknown" | Send to Slack for human review |
+| **draft_only** | All other cases | Save draft for later review |
+
+### Dual-Confidence System (Bug/Request)
+
+Sensitive classifications (bugs and feature requests) require **both** thresholds to auto-send:
+
+```
+Classification Confidence > 0.8  AND  Response Confidence > 0.875
+       │                                    │
+       ▼                                    ▼
+"We're sure it's a bug"          "We're sure our answer is correct"
+```
+
+**Why dual-confidence?**
+- Classification confidence: How sure is the AI that this is a bug vs. a question?
+- Response confidence: How sure is the AI that its proposed fix is correct?
+- Both must be high to avoid sending incorrect fixes to users
+
+**Thresholds:**
+- Classification > 0.8: High certainty of issue type (bug vs. request vs. normal)
+- Response > 0.875: Very high certainty of response quality (verified links, exact solution)
+- If either is below threshold → escalates to human review
+
+**Response Confidence Factors:**
+- 0.9-1.0: Exact solution, verified links, very confident
+- 0.8-0.9: Good approach, working links, minor uncertainty
+- 0.7-0.8: Reasonable but needs verification
+- <0.8: Don't auto-send, needs human review
+
+See `src/lib/config.ts` → `evaluateResponsePolicy()` for implementation.
 
 ## AI Provider Routing (src/lib/ai.ts)
 
@@ -414,6 +444,22 @@ JOIN mcp_tools t ON e.tool_id = t.id
 WHERE e.created_at > datetime('now', '-1 hour')
 ORDER BY e.created_at DESC;
 ```
+
+### Tool Quality Assessment
+
+Each tool result is assigned a quality score by `assessQuality()` in `src/lib/mcp/executor.ts`:
+
+| Quality | Criteria | Usage |
+|---------|----------|-------|
+| **high** | Result > 500 chars, no errors | Full confidence in AI response |
+| **medium** | Result 50-500 chars, no errors | Standard confidence |
+| **low** | Result < 50 chars or contains "error"/"not found" | Reduced confidence |
+| **none** | No result or execution failed | Don't include in AI context |
+
+Quality scores are used to:
+1. Filter out low-quality results from the AI context
+2. Log tool effectiveness for debugging
+3. Potentially trigger re-execution with different parameters (future)
 
 ## Commands
 
