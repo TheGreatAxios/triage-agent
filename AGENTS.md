@@ -25,7 +25,7 @@ Telegram → webhook.ts → rate-limit → ingest.ts pipeline:
                                           ↓ (if bug/request)
                                           Linear triage issue
 
-Scheduled (every minute):
+Scheduled (every 5 minutes):
   processTimers → classify + respond for fired timers
   archiveOldMessages → R2 JSONL + prune D1
 ```

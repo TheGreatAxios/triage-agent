@@ -296,7 +296,7 @@ migrations/             # D1 schema migrations
 5. **Response** follows policy: auto_send / escalate / draft_only
 6. **Linear** creates triage issues for bugs and feature requests
 
-### Scheduled Tasks (every minute)
+### Scheduled Tasks (every 5 minutes)
 
 - **Timer processing**: Handle expired "no response" timers
 - **Archival**: Move old messages to R2, prune from D1
