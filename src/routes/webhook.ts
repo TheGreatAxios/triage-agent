@@ -6,6 +6,15 @@ import { checkRateLimit } from "../lib/rate-limiter";
 import { ingestUpdate } from "../pipeline/ingest";
 import { logger } from "../lib/logger";
 
+/**
+ * Telegram webhook handler.
+ *
+ * TODO: When adding multi-source support, refactor to:
+ * 1. Extract Telegram-specific logic to a TelegramAdapter class
+ * 2. Route /webhook/:source to appropriate adapter via SourceRegistry
+ * 3. Keep verification logic in adapter (verifyTelegramWebhook -> adapter.verify)
+ */
+
 export const webhook = new Hono<AppEnv>();
 
 webhook.post("/telegram", async (c) => {

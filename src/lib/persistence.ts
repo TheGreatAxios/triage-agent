@@ -12,6 +12,11 @@ export interface PersistResult {
  * Persist an InternalEvent to D1: upsert chat, upsert participant, insert message.
  * Uses INSERT OR IGNORE / ON CONFLICT for idempotency on duplicate delivery.
  * Returns internal DB IDs for downstream use (e.g., classification persistence).
+ *
+ * TODO: Multi-source support:
+ * 1. Abstract chatMeta: TelegramChat -> generic ChatInfo with source field
+ * 2. upsertChat should use event.source instead of hardcoded telegram_chat_id
+ * 3. Add source-specific ID columns (e.g., external_chat_id) or use JSON metadata
  */
 export async function persistEvent(
   db: D1Database,
@@ -92,11 +97,12 @@ async function insertMessage(
   // Composite unique constraint on (chat_id, telegram_message_id)
   const result = await db
     .prepare(
-      `INSERT INTO active_messages (chat_id, telegram_message_id, sender_id, text, event_type, is_mention, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO active_messages (source, chat_id, telegram_message_id, sender_id, text, event_type, is_mention, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT (chat_id, telegram_message_id) DO NOTHING`
     )
     .bind(
+      event.source,
       chatId,
       event.messageId,
       senderId,

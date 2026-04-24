@@ -1,17 +1,22 @@
 import type { TelegramUpdate } from "./telegram";
 
-/** Internal normalized event produced from a Telegram update. */
+/** Supported message sources. */
+export type Source = "telegram" | "email" | "slack" | "api";
+
+/** Internal normalized event produced from a source update. */
 
 export type MessageEventType = "message" | "edit" | "command" | "mention";
 
 export interface InternalEvent {
-  /** Unique event ID (update_id from Telegram) */
+  /** Unique event ID (source-specific) */
   id: number;
+  /** Source system (telegram, email, slack, api) */
+  source: Source;
   /** Normalized event type */
   type: MessageEventType;
-  /** Telegram chat ID */
+  /** Source-specific chat ID */
   chatId: number;
-  /** Telegram message ID */
+  /** Source-specific message ID */
   messageId: number;
   /** Sender info */
   sender: {
@@ -22,10 +27,10 @@ export interface InternalEvent {
   };
   /** Message content */
   text: string;
-  /** Whether the bot was mentioned in this message */
+  /** Whether the bot was mentioned/addressed in this message */
   isMention: boolean;
   /** ISO timestamp */
   timestamp: string;
-  /** Raw Telegram update for debugging/tracing */
+  /** Raw source payload for debugging/tracing */
   raw?: TelegramUpdate;
 }

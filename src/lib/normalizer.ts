@@ -4,6 +4,10 @@ import type { InternalEvent, MessageEventType } from "../types/events";
 /**
  * Normalize a raw Telegram update into an InternalEvent.
  * Returns null if the update contains no processable message.
+ *
+ * TODO: Extract to src/sources/telegram.ts as TelegramAdapter when adding
+ * multi-source support. This file will become the Telegram-specific adapter
+ * implementation following the SourceAdapter interface.
  */
 export function normalizeUpdate(update: TelegramUpdate): InternalEvent | null {
   const isEdit = !!update.edited_message;
@@ -17,6 +21,7 @@ export function normalizeUpdate(update: TelegramUpdate): InternalEvent | null {
 
   return {
     id: update.update_id,
+    source: "telegram",
     type: eventType,
     chatId: message.chat.id,
     messageId: message.message_id,

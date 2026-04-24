@@ -1,6 +1,7 @@
 -- Telegram chats being tracked
 CREATE TABLE IF NOT EXISTS chats (
   id INTEGER PRIMARY KEY,
+  source TEXT NOT NULL DEFAULT 'telegram',
   telegram_chat_id INTEGER NOT NULL UNIQUE,
   type TEXT NOT NULL DEFAULT 'group',
   title TEXT,
@@ -29,6 +30,7 @@ CREATE INDEX idx_participants_chat ON chat_participants(chat_id);
 -- Recent messages (hot state, pruned on archive)
 CREATE TABLE IF NOT EXISTS active_messages (
   id INTEGER PRIMARY KEY,
+  source TEXT NOT NULL DEFAULT 'telegram',
   chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
   telegram_message_id INTEGER NOT NULL,
   sender_id INTEGER NOT NULL REFERENCES chat_participants(id),
@@ -83,6 +85,7 @@ CREATE INDEX idx_classifications_chat ON classifications(chat_id);
 -- Draft responses
 CREATE TABLE IF NOT EXISTS drafts (
   id INTEGER PRIMARY KEY,
+  source TEXT NOT NULL DEFAULT 'telegram',
   chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
   content TEXT NOT NULL,
   confidence REAL NOT NULL DEFAULT 0.0,
