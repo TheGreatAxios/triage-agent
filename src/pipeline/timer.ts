@@ -1,4 +1,5 @@
 import type { Env } from "../types/env";
+import type { ClassificationResult } from "../types/classification";
 import { getFiredTimers, markTimerFired } from "../lib/state";
 import { handleResponse } from "./respond";
 import { logger } from "../lib/logger";
@@ -52,7 +53,7 @@ export async function processTimers(env: Env): Promise<number> {
 async function getLatestClassification(
   db: D1Database,
   chatId: number
-) {
+): Promise<ClassificationResult | null> {
   const row = await db
     .prepare(
       `SELECT label, confidence, method
@@ -66,10 +67,24 @@ async function getLatestClassification(
 
   if (!row) return null;
 
+  // Validate label is a valid ClassificationLabel
+  const validLabels: ClassificationResult["label"][] = ["bug", "request", "normal", "unknown"];
+  if (!validLabels.includes(row.label as ClassificationResult["label"])) {
+    logger.warn("Invalid classification label in database", { label: row.label, chatId });
+    return null;
+  }
+
+  // Validate method is a valid ClassificationMethod
+  const validMethods: ClassificationResult["method"][] = ["rule", "model"];
+  if (!validMethods.includes(row.method as ClassificationResult["method"])) {
+    logger.warn("Invalid classification method in database", { method: row.method, chatId });
+    return null;
+  }
+
   return {
-    label: row.label as "bug" | "request" | "normal" | "unknown",
+    label: row.label as ClassificationResult["label"],
     confidence: row.confidence,
-    method: row.method as "rule" | "model",
+    method: row.method as ClassificationResult["method"],
     reasoning: "From latest classification",
   };
 }

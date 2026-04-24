@@ -63,5 +63,10 @@ export function resolveModel(
       });
       return openrouter.chatModel(model);
     }
+    default: {
+      // Exhaustiveness check: if we add a new AIProvider, TypeScript will error here
+      const _exhaustiveCheck: never = provider;
+      throw new Error(`Unsupported AI provider: ${String(_exhaustiveCheck)}`);
+    }
   }
 }

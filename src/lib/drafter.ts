@@ -6,6 +6,8 @@ import { getModel } from "./ai";
 import { getOrRefreshSummary } from "./summary";
 import { evaluateResponsePolicy } from "./config";
 import { logger } from "./logger";
+import { getRecentMessagesWithSenders, buildMessageContext } from "./queries";
+import { DatabaseError, AIError } from "./errors";
 
 export interface DraftResult {
   draftId: number;
@@ -14,12 +16,6 @@ export interface DraftResult {
   status: DraftStatus;
   policyAction: "auto_send" | "draft_only" | "escalate";
   policyReason: string;
-}
-
-interface RecentMessageRow {
-  text: string;
-  display_name: string;
-  created_at: string;
 }
 
 const DRAFT_PROMPT = `You are a helpful support assistant for a Telegram community.
@@ -76,22 +72,15 @@ export async function generateDraft(
 async function buildContext(db: D1Database, chatId: number): Promise<string> {
   const summary = await getOrRefreshSummary(db, chatId);
 
-  const { results } = await db
-    .prepare(
-      `SELECT am.text, cp.display_name, am.created_at
-       FROM active_messages am
-       JOIN chat_participants cp ON cp.id = am.sender_id
-       WHERE am.chat_id = ?
-       ORDER BY am.created_at DESC
-       LIMIT 10`
-    )
-    .bind(chatId)
-    .all<RecentMessageRow>();
+  // Fetch recent messages with sender info using centralized query
+  const messages = await getRecentMessagesWithSenders(db, {
+    chatId,
+    limit: 10,
+    order: "desc",
+  });
 
-  const recentMessages = results
-    .reverse()
-    .map((m) => `[${m.display_name}]: ${m.text}`)
-    .join("\n");
+  // Reverse to chronological order for context building
+  const recentMessages = buildMessageContext(messages.reverse());
 
   let context = "";
   if (summary) {
@@ -114,9 +103,14 @@ async function generateDraftContent(env: Env, context: string): Promise<string> 
 
     return text.trim();
   } catch (err) {
-    logger.error("Draft generation failed", {
-      error: err instanceof Error ? err.message : String(err),
-    });
+    const error = new AIError(
+      "Draft generation failed",
+      "workers-ai", // Could be dynamic based on actual provider
+      "@cf/meta/llama-3.1-8b-instruct",
+      "draft",
+      { originalError: err instanceof Error ? err.message : String(err) }
+    );
+    logger.error(error.message, error.toJSON());
     return "I'm not sure how to help with that. Let me get a human to assist you.";
   }
 }
@@ -128,23 +122,41 @@ async function persistDraft(
   confidence: number,
   status: DraftStatus
 ): Promise<number> {
-  await db
-    .prepare(
-      `INSERT INTO drafts (chat_id, content, confidence, status)
-       VALUES (?, ?, ?, ?)`
-    )
-    .bind(chatId, content, confidence, status)
-    .run();
+  try {
+    await db
+      .prepare(
+        `INSERT INTO drafts (chat_id, content, confidence, status)
+         VALUES (?, ?, ?, ?)`
+      )
+      .bind(chatId, content, confidence, status)
+      .run();
 
-  const row = await db
-    .prepare(
-      `SELECT id FROM drafts WHERE chat_id = ? ORDER BY created_at DESC LIMIT 1`
-    )
-    .bind(chatId)
-    .first<{ id: number }>();
+    const row = await db
+      .prepare(
+        `SELECT id FROM drafts WHERE chat_id = ? ORDER BY created_at DESC LIMIT 1`
+      )
+      .bind(chatId)
+      .first<{ id: number }>();
 
-  if (!row) throw new Error(`Failed to persist draft for chat ${chatId}`);
-  return row.id;
+    if (!row) {
+      throw new DatabaseError(
+        `Draft was inserted but could not be retrieved`,
+        "SELECT",
+        "drafts",
+        { chatId }
+      );
+    }
+
+    return row.id;
+  } catch (err) {
+    if (err instanceof DatabaseError) throw err;
+    throw new DatabaseError(
+      `Failed to persist draft for chat ${chatId}`,
+      "INSERT",
+      "drafts",
+      { chatId, error: err instanceof Error ? err.message : String(err) }
+    );
+  }
 }
 
 /**
@@ -152,7 +164,9 @@ async function persistDraft(
  */
 export async function markDraftSent(db: D1Database, draftId: number): Promise<void> {
   await db
-    .prepare(`UPDATE drafts SET status = 'sent', sent_at = datetime('now') WHERE id = ?`)
+    .prepare(
+      `UPDATE drafts SET status = 'sent', sent_at = datetime('now') WHERE id = ?`
+    )
     .bind(draftId)
     .run();
 }

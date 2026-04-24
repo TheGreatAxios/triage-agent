@@ -1,3 +1,5 @@
+import type { TelegramUpdate } from "./telegram";
+
 /** Internal normalized event produced from a Telegram update. */
 
 export type MessageEventType = "message" | "edit" | "command" | "mention";
@@ -24,6 +26,6 @@ export interface InternalEvent {
   isMention: boolean;
   /** ISO timestamp */
   timestamp: string;
-  /** Raw Telegram update for debugging */
-  raw?: unknown;
+  /** Raw Telegram update for debugging/tracing */
+  raw?: TelegramUpdate;
 }

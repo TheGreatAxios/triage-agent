@@ -209,19 +209,15 @@ function parseModelResponse(text: string): ClassificationResult | null {
     const jsonMatch = text.match(/\{[^}]+\}/);
     if (!jsonMatch) return null;
 
-    const parsed = JSON.parse(jsonMatch[0]) as {
-      label?: string;
-      confidence?: number;
-      reasoning?: string;
-    };
+    const parsed = JSON.parse(jsonMatch[0]) as Record<string, unknown>;
 
-    const validLabels: ClassificationLabel[] = ["bug", "request", "normal"];
-    if (!parsed.label || !validLabels.includes(parsed.label as ClassificationLabel)) {
+    // Type guard: validate parsed object structure
+    if (!isValidClassificationResponse(parsed)) {
       return null;
     }
 
     return {
-      label: parsed.label as ClassificationLabel,
+      label: parsed.label,
       confidence: Math.max(0, Math.min(1, parsed.confidence ?? 0.5)),
       method: "model",
       reasoning: parsed.reasoning ?? "Classified by model",
@@ -229,4 +225,30 @@ function parseModelResponse(text: string): ClassificationResult | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Type guard to validate model response structure at runtime.
+ */
+function isValidClassificationResponse(
+  obj: Record<string, unknown>
+): obj is { label: ClassificationLabel; confidence?: number; reasoning?: string } {
+  const validLabels: ClassificationLabel[] = ["bug", "request", "normal", "unknown"];
+
+  // label must be a string and a valid ClassificationLabel
+  if (typeof obj.label !== "string" || !validLabels.includes(obj.label as ClassificationLabel)) {
+    return false;
+  }
+
+  // confidence, if present, must be a number
+  if (obj.confidence !== undefined && typeof obj.confidence !== "number") {
+    return false;
+  }
+
+  // reasoning, if present, must be a string
+  if (obj.reasoning !== undefined && typeof obj.reasoning !== "string") {
+    return false;
+  }
+
+  return true;
 }

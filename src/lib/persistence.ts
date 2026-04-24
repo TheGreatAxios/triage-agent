@@ -25,6 +25,8 @@ export async function persistEvent(
 }
 
 async function upsertChat(db: D1Database, chat: TelegramChat): Promise<number> {
+  // Upsert: update title and timestamp if chat already exists
+  // This handles Telegram group title changes and duplicate webhook deliveries
   await db
     .prepare(
       `INSERT INTO chats (telegram_chat_id, type, title)
@@ -36,8 +38,11 @@ async function upsertChat(db: D1Database, chat: TelegramChat): Promise<number> {
     .bind(chat.id, chat.type, chat.title ?? null)
     .run();
 
+  // Retrieve the internal ID (whether just inserted or existing)
   const row = await db
-    .prepare(`SELECT id FROM chats WHERE telegram_chat_id = ?`)
+    .prepare(
+      `SELECT id FROM chats WHERE telegram_chat_id = ?`
+    )
     .bind(chat.id)
     .first<{ id: number }>();
 
@@ -50,6 +55,9 @@ async function upsertParticipant(
   chatId: number,
   event: InternalEvent
 ): Promise<number> {
+  // Upsert on composite unique key (chat_id, telegram_user_id)
+  // Updates display name/username in case user changed them
+  // Always updates last_seen_at for activity tracking
   await db
     .prepare(
       `INSERT INTO chat_participants (chat_id, telegram_user_id, is_bot, display_name, username)
@@ -62,8 +70,11 @@ async function upsertParticipant(
     .bind(chatId, event.sender.id, event.sender.isBot ? 1 : 0, event.sender.name, event.sender.username ?? null)
     .run();
 
+  // Retrieve internal participant ID for message insertion FK
   const row = await db
-    .prepare(`SELECT id FROM chat_participants WHERE chat_id = ? AND telegram_user_id = ?`)
+    .prepare(
+      `SELECT id FROM chat_participants WHERE chat_id = ? AND telegram_user_id = ?`
+    )
     .bind(chatId, event.sender.id)
     .first<{ id: number }>();
 
@@ -77,6 +88,8 @@ async function insertMessage(
   senderId: number,
   event: InternalEvent
 ): Promise<number> {
+  // Idempotency: ignore duplicates from Telegram webhook redeliveries
+  // Composite unique constraint on (chat_id, telegram_message_id)
   const result = await db
     .prepare(
       `INSERT INTO active_messages (chat_id, telegram_message_id, sender_id, text, event_type, is_mention, created_at)
@@ -94,6 +107,7 @@ async function insertMessage(
     )
     .run();
 
+  // Log duplicate detection (changes === 0 means row was skipped)
   if (result.meta.changes === 0) {
     logger.info("Duplicate message ignored", {
       chatId,
@@ -101,6 +115,7 @@ async function insertMessage(
     });
   }
 
+  // Retrieve internal message ID for classification persistence
   const row = await db
     .prepare(
       `SELECT id FROM active_messages WHERE chat_id = ? AND telegram_message_id = ?`
@@ -114,6 +129,8 @@ async function insertMessage(
 
 /**
  * Persist a classification result for a message.
+ * Note: No ON CONFLICT clause - we want to record every classification attempt
+ * for analytics, even if the same message is classified multiple times.
  */
 export async function persistClassification(
   db: D1Database,

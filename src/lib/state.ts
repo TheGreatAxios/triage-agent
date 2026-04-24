@@ -36,6 +36,9 @@ export async function updateConversationState(
   const isBot = event.sender.isBot;
   const now = event.timestamp;
 
+  // Upsert: update timestamps conditionally based on sender type
+  // CASE expressions: update human timestamp only for human messages, bot timestamp only for bot messages
+  // message_count always increments to track conversation length
   await db
     .prepare(
       `INSERT INTO conversation_state (chat_id, last_human_response_at, last_bot_response_at, message_count, updated_at)
@@ -82,6 +85,8 @@ export async function scheduleNoResponseTimer(
     .bind(chatId, triggerType, firesAt, null)
     .run();
 
+  // Mirror timer state to conversation_state for quick lookup
+  // Avoids JOIN to timers table when checking if a chat has pending triggers
   await db
     .prepare(
       `UPDATE conversation_state
@@ -101,6 +106,8 @@ export async function cancelTimers(
   db: D1Database,
   chatId: number
 ): Promise<number> {
+  // Soft-delete: mark timers as cancelled rather than deleting
+  // Preserves audit trail of timer lifecycle
   const result = await db
     .prepare(
       `UPDATE timers SET status = 'cancelled' WHERE chat_id = ? AND status = 'active'`
@@ -108,6 +115,7 @@ export async function cancelTimers(
     .bind(chatId)
     .run();
 
+  // Clear the mirrored trigger state in conversation_state
   if (result.meta.changes > 0) {
     await db
       .prepare(
@@ -133,6 +141,9 @@ export async function cancelTimers(
 export async function getFiredTimers(db: D1Database): Promise<Timer[]> {
   const now = new Date().toISOString();
 
+  // Query: Find timers that should have fired by now (fires_at <= current time)
+  // Only active timers; cancelled/fired timers are excluded
+  // Process oldest timers first for fairness
   const { results } = await db
     .prepare(
       `SELECT id, chat_id, type, fires_at, payload, status, created_at
@@ -170,7 +181,9 @@ export async function markTimerFired(
   timerId: number
 ): Promise<void> {
   await db
-    .prepare(`UPDATE timers SET status = 'fired' WHERE id = ?`)
+    .prepare(
+      `UPDATE timers SET status = 'fired' WHERE id = ?`
+    )
     .bind(timerId)
     .run();
 }
@@ -183,7 +196,9 @@ export async function getConversationState(
   chatId: number
 ): Promise<ConversationState | null> {
   const row = await db
-    .prepare(`SELECT * FROM conversation_state WHERE chat_id = ?`)
+    .prepare(
+      `SELECT * FROM conversation_state WHERE chat_id = ?`
+    )
     .bind(chatId)
     .first<{
       id: number;

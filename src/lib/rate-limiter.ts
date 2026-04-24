@@ -12,6 +12,8 @@ export async function checkRateLimit(
 ): Promise<boolean> {
   const cutoff = new Date(Date.now() - windowSeconds * 1000).toISOString();
 
+  // Subquery: map Telegram chat ID to internal chat ID
+  // Only count messages within the rate limit window
   const row = await db
     .prepare(
       `SELECT COUNT(*) as cnt

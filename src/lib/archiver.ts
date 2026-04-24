@@ -1,57 +1,68 @@
 import type { Env } from "../types/env";
 import { getConfig } from "./config";
 import { logger } from "./logger";
+import { getOverflowingChats, getMessagesForArchival } from "./queries";
 
-interface ArchivableMessage {
-  id: number;
-  telegram_message_id: number;
-  sender_id: number;
-  display_name: string;
-  text: string | null;
-  event_type: string;
-  is_mention: number;
-  created_at: string;
-}
-
-interface ChatOverflow {
-  chat_id: number;
-  msg_count: number;
-}
+/** Maximum number of chats to archive concurrently. */
+const ARCHIVE_CONCURRENCY = 3;
 
 /**
  * Archive old messages from D1 to R2 for chats exceeding maxHotMessages.
  * For each overflowing chat, the oldest messages beyond the hot window are
  * written to R2 as JSONL, a pointer is saved in the archives table, and
  * the archived rows are deleted from active_messages.
+ *
+ * Processes chats with controlled concurrency to balance speed with resource usage.
  */
 export async function archiveOldMessages(env: Env): Promise<number> {
   const config = getConfig();
   const { maxHotMessages } = config;
 
-  const { results: overflows } = await env.DB.prepare(
-    `SELECT chat_id, COUNT(*) as msg_count
-     FROM active_messages
-     GROUP BY chat_id
-     HAVING msg_count > ?`
-  )
-    .bind(maxHotMessages)
-    .all<ChatOverflow>();
+  // Use centralized query to find overflowing chats
+  const overflows = await getOverflowingChats(env.DB, maxHotMessages);
 
   if (overflows.length === 0) return 0;
 
-  let totalArchived = 0;
+  logger.info("Starting archival run", {
+    chatCount: overflows.length,
+    concurrency: ARCHIVE_CONCURRENCY,
+  });
 
-  for (const { chat_id, msg_count } of overflows) {
-    try {
-      const archived = await archiveChat(env, chat_id, msg_count, maxHotMessages);
-      totalArchived += archived;
-    } catch (err) {
-      logger.error("Failed to archive chat", {
-        chatId: chat_id,
-        error: err instanceof Error ? err.message : String(err),
-      });
+  // Process chats with limited concurrency
+  let totalArchived = 0;
+  const queue = [...overflows];
+
+  while (queue.length > 0) {
+    // Take up to ARCHIVE_CONCURRENCY chats from the queue
+    const batch = queue.splice(0, ARCHIVE_CONCURRENCY);
+
+    // Process batch concurrently
+    const results = await Promise.allSettled(
+      batch.map(({ chat_id, msg_count }) =>
+        archiveChat(env, chat_id, msg_count, maxHotMessages)
+      )
+    );
+
+    // Aggregate results and log failures
+    for (let i = 0; i < results.length; i++) {
+      const result = results[i];
+      const { chat_id } = batch[i];
+
+      if (result.status === "fulfilled") {
+        totalArchived += result.value;
+      } else {
+        logger.error("Failed to archive chat", {
+          chatId: chat_id,
+          error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+        });
+      }
     }
   }
+
+  logger.info("Archival run complete", {
+    chatsProcessed: overflows.length,
+    totalMessagesArchived: totalArchived,
+  });
 
   return totalArchived;
 }
@@ -64,24 +75,15 @@ async function archiveChat(
 ): Promise<number> {
   const toArchive = msgCount - maxHot;
 
-  const { results } = await env.DB.prepare(
-    `SELECT am.id, am.telegram_message_id, am.sender_id,
-            cp.display_name, am.text, am.event_type, am.is_mention, am.created_at
-     FROM active_messages am
-     JOIN chat_participants cp ON cp.id = am.sender_id
-     WHERE am.chat_id = ?
-     ORDER BY am.created_at ASC
-     LIMIT ?`
-  )
-    .bind(chatId, toArchive)
-    .all<ArchivableMessage>();
+  // Use centralized query to fetch messages for archival
+  const messages = await getMessagesForArchival(env.DB, chatId, toArchive);
 
-  if (results.length === 0) return 0;
+  if (messages.length === 0) return 0;
 
-  const windowStart = results[0].created_at;
-  const windowEnd = results[results.length - 1].created_at;
+  const windowStart = messages[0].created_at;
+  const windowEnd = messages[messages.length - 1].created_at;
 
-  const lines = results.map((m) =>
+  const lines = messages.map((m) =>
     JSON.stringify({
       messageId: m.telegram_message_id,
       senderId: m.sender_id,
@@ -99,7 +101,7 @@ async function archiveChat(
     httpMetadata: { contentType: "application/jsonl" },
     customMetadata: {
       chatId: String(chatId),
-      messageCount: String(results.length),
+      messageCount: String(messages.length),
     },
   });
 
@@ -107,10 +109,10 @@ async function archiveChat(
     `INSERT INTO archives (chat_id, r2_key, window_start, window_end, message_count)
      VALUES (?, ?, ?, ?, ?)`
   )
-    .bind(chatId, r2Key, windowStart, windowEnd, results.length)
+    .bind(chatId, r2Key, windowStart, windowEnd, messages.length)
     .run();
 
-  const ids = results.map((m) => m.id);
+  const ids = messages.map((m) => m.id);
   const placeholders = ids.map(() => "?").join(",");
   await env.DB.prepare(
     `DELETE FROM active_messages WHERE id IN (${placeholders})`
@@ -120,11 +122,11 @@ async function archiveChat(
 
   logger.info("Chat archived", {
     chatId,
-    messageCount: results.length,
+    messageCount: messages.length,
     r2Key,
   });
 
-  return results.length;
+  return messages.length;
 }
 
 function buildR2Key(

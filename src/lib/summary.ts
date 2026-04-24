@@ -1,5 +1,6 @@
 import { getConfig } from "./config";
 import { logger } from "./logger";
+import { getRecentMessagesWithSenders } from "./queries";
 
 export interface ChatSummary {
   id: number;
@@ -12,7 +13,7 @@ export interface ChatSummary {
 
 interface MessageRow {
   id: number;
-  text: string;
+  text: string | null;
   display_name: string;
   created_at: string;
 }
@@ -57,6 +58,7 @@ async function getLatestSummary(
   db: D1Database,
   chatId: number
 ): Promise<ChatSummary | null> {
+  // Get the most recent summary for this chat
   const row = await db
     .prepare(
       `SELECT id, chat_id, content, message_range_start, message_range_end, created_at
@@ -97,6 +99,7 @@ function isSummaryStale(summary: ChatSummary): boolean {
 /**
  * Fetch recent messages for a chat to build a summary from.
  * Uses maxHotMessages config to limit the window.
+ * Delegates to centralized query module for consistency.
  */
 async function getRecentMessages(
   db: D1Database,
@@ -104,19 +107,14 @@ async function getRecentMessages(
 ): Promise<MessageRow[]> {
   const config = getConfig();
 
-  const { results } = await db
-    .prepare(
-      `SELECT am.id, am.text, cp.display_name, am.created_at
-       FROM active_messages am
-       JOIN chat_participants cp ON cp.id = am.sender_id
-       WHERE am.chat_id = ?
-       ORDER BY am.created_at DESC
-       LIMIT ?`
-    )
-    .bind(chatId, config.maxHotMessages)
-    .all<MessageRow>();
+  const messages = await getRecentMessagesWithSenders(db, {
+    chatId,
+    limit: config.maxHotMessages,
+    order: "desc",
+  });
 
-  return results.reverse();
+  // Reverse to chronological order for summary building
+  return messages.reverse();
 }
 
 /**
@@ -126,7 +124,7 @@ async function getRecentMessages(
  */
 function buildSummaryContent(messages: MessageRow[]): string {
   const lines = messages.map(
-    (m) => `[${m.display_name}]: ${m.text}`
+    (m) => `[${m.display_name}]: ${m.text ?? ""}`
   );
   return lines.join("\n");
 }

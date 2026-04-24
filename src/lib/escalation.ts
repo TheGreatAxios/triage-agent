@@ -1,6 +1,8 @@
 import type { ClassificationResult } from "../types/classification";
 import type { EscalationStatus } from "../types/escalation";
 import { logger } from "./logger";
+import { getFormattedMessagesForEscalation } from "./queries";
+import { APIError, DatabaseError } from "./errors";
 
 export interface EscalationContext {
   chatId: number;
@@ -128,19 +130,26 @@ async function sendSlackNotification(
 
     if (!resp.ok) {
       const body = await resp.text();
-      logger.error("Slack webhook failed", {
-        status: resp.status,
-        body,
-      });
+      const error = new APIError(
+        `Slack webhook returned ${resp.status}`,
+        "slack",
+        resp.status,
+        { responseBody: body }
+      );
+      logger.error(error.message, error.toJSON());
       return false;
     }
 
     logger.info("Slack escalation sent");
     return true;
   } catch (err) {
-    logger.error("Slack webhook error", {
-      error: err instanceof Error ? err.message : String(err),
-    });
+    const error = new APIError(
+      "Slack webhook request failed",
+      "slack",
+      undefined,
+      { originalError: err instanceof Error ? err.message : String(err) }
+    );
+    logger.error(error.message, error.toJSON());
     return false;
   }
 }
@@ -151,23 +160,41 @@ async function persistEscalation(
   draftId: number | null,
   reason: string
 ): Promise<number> {
-  await db
-    .prepare(
-      `INSERT INTO escalations (chat_id, draft_id, reason, status)
-       VALUES (?, ?, ?, 'pending')`
-    )
-    .bind(chatId, draftId, reason)
-    .run();
+  try {
+    await db
+      .prepare(
+        `INSERT INTO escalations (chat_id, draft_id, reason, status)
+         VALUES (?, ?, ?, 'pending')`
+      )
+      .bind(chatId, draftId, reason)
+      .run();
 
-  const row = await db
-    .prepare(
-      `SELECT id FROM escalations WHERE chat_id = ? ORDER BY created_at DESC LIMIT 1`
-    )
-    .bind(chatId)
-    .first<{ id: number }>();
+    const row = await db
+      .prepare(
+        `SELECT id FROM escalations WHERE chat_id = ? ORDER BY created_at DESC LIMIT 1`
+      )
+      .bind(chatId)
+      .first<{ id: number }>();
 
-  if (!row) throw new Error(`Failed to persist escalation for chat ${chatId}`);
-  return row.id;
+    if (!row) {
+      throw new DatabaseError(
+        "Escalation was inserted but could not be retrieved",
+        "SELECT",
+        "escalations",
+        { chatId }
+      );
+    }
+
+    return row.id;
+  } catch (err) {
+    if (err instanceof DatabaseError) throw err;
+    throw new DatabaseError(
+      `Failed to persist escalation for chat ${chatId}`,
+      "INSERT",
+      "escalations",
+      { chatId, draftId, error: err instanceof Error ? err.message : String(err) }
+    );
+  }
 }
 
 /**
@@ -187,7 +214,9 @@ export async function updateEscalationStatus(
       .run();
   } else {
     await db
-      .prepare(`UPDATE escalations SET status = ? WHERE id = ?`)
+      .prepare(
+        `UPDATE escalations SET status = ? WHERE id = ?`
+      )
       .bind(status, escalationId)
       .run();
   }
@@ -195,25 +224,14 @@ export async function updateEscalationStatus(
 
 /**
  * Get recent messages for a chat as formatted strings for escalation context.
+ * Delegates to centralized query module for consistency.
  */
 export async function getRecentMessagesForEscalation(
   db: D1Database,
   chatId: number,
   limit: number = 5
 ): Promise<string[]> {
-  const { results } = await db
-    .prepare(
-      `SELECT am.text, cp.display_name
-       FROM active_messages am
-       JOIN chat_participants cp ON cp.id = am.sender_id
-       WHERE am.chat_id = ?
-       ORDER BY am.created_at DESC
-       LIMIT ?`
-    )
-    .bind(chatId, limit)
-    .all<{ text: string; display_name: string }>();
-
-  return results.reverse().map((m) => `[${m.display_name}]: ${m.text}`);
+  return getFormattedMessagesForEscalation(db, chatId, limit);
 }
 
 /**
@@ -224,7 +242,9 @@ export async function getChatTitle(
   chatId: number
 ): Promise<string | null> {
   const row = await db
-    .prepare(`SELECT title FROM chats WHERE id = ?`)
+    .prepare(
+      `SELECT title FROM chats WHERE id = ?`
+    )
     .bind(chatId)
     .first<{ title: string | null }>();
 
@@ -239,7 +259,9 @@ export async function getTelegramChatId(
   chatId: number
 ): Promise<number | null> {
   const row = await db
-    .prepare(`SELECT telegram_chat_id FROM chats WHERE id = ?`)
+    .prepare(
+      `SELECT telegram_chat_id FROM chats WHERE id = ?`
+    )
     .bind(chatId)
     .first<{ telegram_chat_id: number }>();
 
