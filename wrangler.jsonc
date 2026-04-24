@@ -46,7 +46,10 @@
 					"binding": "ARCHIVE",
 					"bucket_name": "${R2_BUCKET_NAME}"
 				}
-			]
+			],
+			"ai": {
+				"binding": "AI"
+			}
 		}
 	}
 }
