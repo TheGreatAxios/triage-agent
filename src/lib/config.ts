@@ -33,15 +33,25 @@ export function getConfig(): AppConfig {
 /**
  * Determine the response action based on classification confidence and label.
  *
+ * - Escalate: label is "bug" or "request" (always relevant, notify Slack)
+ *             OR confidence < escalationThreshold
+ *             OR label is "unknown"
  * - Auto-send: confidence >= autoSendThreshold AND label is in autoSendLabels
- * - Escalate: confidence < escalationThreshold OR label is "unknown"
- * - Draft-only: everything in between
+ * - Draft-only: everything else
  */
 export function evaluateResponsePolicy(
   confidence: number,
   label: ClassificationLabel
 ): { action: ResponseAction; reason: string } {
   const config = getConfig();
+
+  // Always escalate bugs and requests to Slack (relevant items need visibility)
+  if (label === "bug" || label === "request") {
+    return {
+      action: "escalate",
+      reason: `Relevant classification "${label}" requires Slack notification`,
+    };
+  }
 
   if (label === "unknown" || confidence < config.escalationThreshold) {
     return {
