@@ -72,35 +72,47 @@ bun install
 npx wrangler login
 
 # Create D1 database
-npx wrangler d1 create telegram-agent-db
-# Copy the database_id from output
+npx wrangler d1 create triage-agent-db
+# Copy the database_id from output (you'll need it for deployment)
 
 # Create R2 bucket
-npx wrangler r2 bucket create telegram-agent-archive
+npx wrangler r2 bucket create triage-agent-archive
 ```
 
-### 3. Update wrangler.jsonc
+### 3. Configure Environment
 
-Edit `wrangler.jsonc` and replace the placeholder `database_id`:
+The project uses a hybrid approach for managing resource IDs:
 
-```jsonc
-{
-  "d1_databases": [
-    {
-      "binding": "DB",
-      "database_name": "telegram-agent-db",
-      "database_id": "PASTE_YOUR_DATABASE_ID_HERE",
-      "migrations_dir": "migrations"
-    }
-  ]
-}
+- **Base config** (`wrangler.jsonc`): Uses placeholder for local development
+- **Production environment**: Uses `DATABASE_ID` environment variable
+- **Secrets**: Stored via Wrangler (never committed)
+
+Create `.dev.vars` for local development (copy from example):
+
+```bash
+cp .dev.vars.example .dev.vars
+# Edit .dev.vars with your actual secrets
 ```
+
+For production deployment, you have two options:
+
+**Option A: Environment variable (recommended for CI/CD)**
+```bash
+# Set the database ID as environment variable
+export DATABASE_ID="your-real-database-id-from-step-2"
+
+# Deploy to production environment
+bun run deploy --env production
+```
+
+**Option B: Direct in config (simpler for manual deploys)**
+Edit `wrangler.jsonc` and temporarily replace `${DATABASE_ID}` with your real ID in the `env.production` section, deploy, then revert.
 
 ### 4. Apply Database Migrations
 
 ```bash
-# Apply to production database
-bun run db:migrate:remote
+# Apply to production database (use --env production to match deployment)
+npx wrangler d1 migrations apply triage-agent-db --remote --env production
 ```
 
 ### 5. Set Environment Variables
