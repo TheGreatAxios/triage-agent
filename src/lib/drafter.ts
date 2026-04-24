@@ -8,6 +8,7 @@ import { evaluateResponsePolicy } from "./config";
 import { logger } from "./logger";
 import { getRecentMessagesWithSenders, buildMessageContext } from "./queries";
 import { DatabaseError, AIError } from "./errors";
+import { sanitizeContextInput } from "./sanitize";
 
 export interface DraftResult {
   draftId: number;
@@ -94,10 +95,12 @@ async function buildContext(db: D1Database, chatId: number): Promise<string> {
 async function generateDraftContent(env: Env, context: string): Promise<string> {
   try {
     const model = getModel(env, "draft");
+    // Sanitize conversation context to prevent prompt injection
+    const sanitizedContext = sanitizeContextInput(context);
     const { text } = await generateText({
       model,
       system: DRAFT_PROMPT,
-      prompt: `Here is the conversation context:\n\n${context}\n\nGenerate a helpful response:`,
+      prompt: `Here is the conversation context:\n\n${sanitizedContext}\n\nGenerate a helpful response:`,
       maxOutputTokens: 200,
       providerOptions: {
         openai: {

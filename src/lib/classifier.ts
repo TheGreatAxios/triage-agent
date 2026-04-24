@@ -4,6 +4,7 @@ import type { ClassificationResult, ClassificationLabel } from "../types/classif
 import type { Env } from "../types/env";
 import { getModel } from "./ai";
 import { logger } from "./logger";
+import { sanitizePromptInput } from "./sanitize";
 
 interface Rule {
   label: ClassificationLabel;
@@ -162,10 +163,12 @@ async function classifyByModel(
 ): Promise<ClassificationResult> {
   try {
     const model = getModel(env, "classify");
+    // Sanitize user input to prevent prompt injection
+    const sanitizedText = sanitizePromptInput(event.text);
     const { text } = await generateText({
       model,
       system: CLASSIFICATION_PROMPT,
-      prompt: event.text,
+      prompt: sanitizedText,
       maxOutputTokens: 50,  // Tiny output: {"label":"bug","confidence":0.9}
       providerOptions: {
         openai: {

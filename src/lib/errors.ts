@@ -29,7 +29,8 @@ export class TriageAgentError extends Error {
       code: this.code,
       message: this.message,
       context: this.context,
-      stack: this.stack,
+      // Stack traces excluded to prevent information leakage in production
+      // Add stack only when explicitly debugging via LOG_STACK_TRACES env var
     };
   }
 }
