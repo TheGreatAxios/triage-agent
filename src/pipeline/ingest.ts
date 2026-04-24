@@ -115,7 +115,7 @@ export async function ingestUpdate(
   if (classification.label === "bug" || classification.label === "request") {
     const respondStart = Date.now();
     try {
-      await handleResponse(env, dbChatId, classification);
+      await handleResponse(env, dbChatId, classification, dbMessageId);
       trackPipelineMetrics({ chatId: event.chatId, stage: "respond", durationMs: Date.now() - respondStart, success: true });
     } catch (err) {
       trackPipelineMetrics({ chatId: event.chatId, stage: "respond", durationMs: Date.now() - respondStart, success: false });

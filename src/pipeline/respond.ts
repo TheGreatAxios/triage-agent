@@ -20,7 +20,8 @@ import { logger } from "../lib/logger";
 export async function handleResponse(
   env: Env,
   chatId: number,
-  classification: ClassificationResult
+  classification: ClassificationResult,
+  dbMessageId?: number
 ): Promise<void> {
   const draft = await generateDraft(env, chatId, classification);
 
@@ -100,8 +101,8 @@ export async function handleResponse(
         recentMessages
       );
 
-      if (issue) {
-        await persistLinearLink(env.DB, chatId, issue.issueId, issue.issueUrl);
+      if (issue && dbMessageId) {
+        await persistLinearLink(env.DB, chatId, dbMessageId, issue.issueId, issue.issueUrl);
       }
     } catch (err) {
       logger.error("Linear triage issue creation failed", {

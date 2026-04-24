@@ -137,14 +137,15 @@ export async function createTriageIssue(
 export async function persistLinearLink(
   db: D1Database,
   chatId: number,
+  messageId: number,
   issueId: string,
   issueUrl: string
 ): Promise<void> {
   await db
     .prepare(
-      `INSERT INTO linear_links (chat_id, linear_issue_id, linear_issue_url, issue_type)
-       VALUES (?, ?, ?, 'triage')`
+      `INSERT INTO linear_links (chat_id, message_id, linear_issue_id, linear_issue_url, issue_type)
+       VALUES (?, ?, ?, ?, 'triage')`
     )
-    .bind(chatId, issueId, issueUrl)
+    .bind(chatId, messageId, issueId, issueUrl)
     .run();
 }
