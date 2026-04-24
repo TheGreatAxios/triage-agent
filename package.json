@@ -2,6 +2,12 @@
   "name": "triage-agent",
   "version": "0.1.6",
   "private": true,
+  "license": "MIT",
+  "author": "Sawyer Cutler <sawyer@dirtroad.dev>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thegreataxios/triage-agent.git"
+  },
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
