@@ -2,6 +2,19 @@
 
 An AI-powered Cloudflare Worker that automatically ingests Telegram messages, classifies them (bug/request/normal), drafts AI responses, and escalates to Slack with Linear ticket creation for bugs and feature requests.
 
+## ⚡ Quick Start Checklist
+
+Before diving into full setup, here's the critical path:
+
+1. **Get Bot Token** → Message [@BotFather](https://t.me/BotFather), create bot, copy token
+2. **Generate Secret** → `openssl rand -hex 16` (save this value!)
+3. **Deploy Worker** → `bun run deploy` (creates D1, R2 automatically)
+4. **Set Secrets** → `wrangler secret put TELEGRAM_BOT_TOKEN` and `TELEGRAM_WEBHOOK_SECRET` (use SAME secret from step 2)
+5. **Set Webhook** → Tell Telegram your worker URL + secret (must match step 4 exactly)
+6. **Test** → `wrangler tail` then send message to bot
+
+**⚠️ Most common failure:** Webhook secret in Cloudflare ≠ Webhook secret sent to Telegram. These must match exactly.
+
 ## What It Does
 
 When someone mentions your bot in a Telegram chat:
@@ -105,6 +118,8 @@ cp .dev.vars.example .dev.vars
 # Edit .dev.vars with your actual secrets (local only)
 ```
 
+**Note:** `.dev.vars` is only for local dev. Production secrets must be set via `wrangler secret put` and must match your Telegram webhook configuration.
+
 ### 4. Apply Database Migrations
 
 ```bash
@@ -112,16 +127,36 @@ cp .dev.vars.example .dev.vars
 npx wrangler d1 migrations apply triage-agent-db --remote
 ```
 
-### 5. Set Secrets
+### 5. Set Secrets (Critical - Read Carefully)
 
-Set production secrets (never commit these):
+**⚠️ The webhook secret must match between Cloudflare AND Telegram. If they don't match, you'll get 401 Unauthorized and no messages will process.**
+
+#### Step 5a: Generate a Webhook Secret
+
+Generate a random secret (or use any strong password):
+```bash
+openssl rand -hex 16
+# Example output: a3f5c8e9d2b1a7f4e6c9d8b3a1f2e5c7
+```
+
+#### Step 5b: Set Secrets in Cloudflare
+
+**Important:** Use the SAME webhook secret value in both commands below.
 
 ```bash
-# Required secrets
+# Required - your bot token from @BotFather
 npx wrangler secret put TELEGRAM_BOT_TOKEN
+
+# Required - use the value you generated above
 npx wrangler secret put TELEGRAM_WEBHOOK_SECRET
+
+# Required for Slack escalation
 npx wrangler secret put SLACK_WEBHOOK_URL
+
+# Required for Linear integration
 npx wrangler secret put LINEAR_API_KEY
+npx wrangler secret put LINEAR_TEAM_ID
+npx wrangler secret put LINEAR_TRIAGE_STATE_ID
 
 # Optional (for alternative AI providers)
 npx wrangler secret put NVIDIA_API_KEY
@@ -129,21 +164,38 @@ npx wrangler secret put OPENAI_API_KEY
 npx wrangler secret put OPENROUTER_API_KEY
 ```
 
+**Verify secrets are set:**
+```bash
+npx wrangler secret list
+```
+
 ### 6. Configure Telegram Bot & Deploy
 
-1. Create a bot via [@BotFather](https://t.me/BotFather)
-2. Set webhook URL:
-   ```bash
-   curl -X POST "https://api.telegram.org/bot<TOKEN>/setWebhook" \
-     -H "Content-Type: application/json" \
-     -d '{
-       "url": "https://triage-agent.YOUR_SUBDOMAIN.workers.dev/webhook/telegram",
-       "secret_token": "YOUR_WEBHOOK_SECRET"
-     }'
-   ```
-3. Get chat ID and add your bot to the group
+1. **Create a bot** via [@BotFather](https://t.me/BotFather) and copy the bot token
 
-4. Deploy to Cloudflare:
+2. **Get your worker URL** (run `npx wrangler whoami` to see your account subdomain):
+   ```
+   https://triage-agent.<your-subdomain>.workers.dev
+   ```
+
+3. **Set Telegram webhook** (use the SAME secret you set in Step 5b):
+   ```bash
+   export TELEGRAM_BOT_TOKEN="your-bot-token-from-botfather"
+   export TELEGRAM_WEBHOOK_SECRET="same-secret-from-step-5b"
+
+   curl -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook" \
+     -H "Content-Type: application/json" \
+     -d "{\"url\":\"https://triage-agent.YOUR_SUBDOMAIN.workers.dev/webhook/telegram\",\"secret_token\":\"${TELEGRAM_WEBHOOK_SECRET}\"}"
+   ```
+
+   **Expected response:** `{"ok":true,"result":true,"description":"Webhook was set"}`
+
+   **Verify webhook is set:**
+   ```bash
+   curl "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getWebhookInfo"
+   ```
+
+4. **Deploy to Cloudflare:**
    ```bash
    # Type check
    npx tsc --noEmit
@@ -151,6 +203,8 @@ npx wrangler secret put OPENROUTER_API_KEY
    # Deploy
    bun run deploy
    ```
+
+5. **Add your bot to a Telegram group** (or message it directly)
 
 ### 7. Verify Deployment
 
@@ -265,13 +319,52 @@ migrations/             # D1 schema migrations
 
 ## Troubleshooting
 
+### Critical: Webhook Secret Mismatch
+
+**Symptoms:** No logs appear when sending Telegram messages, or you see `{"error":"Unauthorized"}`
+
+**Root cause:** The `TELEGRAM_WEBHOOK_SECRET` in Cloudflare doesn't match what Telegram is sending.
+
+**Fix:**
+```bash
+# 1. Check what secret is in Cloudflare
+npx wrangler secret get TELEGRAM_WEBHOOK_SECRET
+
+# 2. Export that exact value locally
+export TELEGRAM_WEBHOOK_SECRET="the-exact-value-from-above"
+
+# 3. Re-set the Telegram webhook with the same secret
+curl -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook" \
+  -H "Content-Type: application/json" \
+  -d "{\"url\":\"https://triage-agent.YOUR_SUBDOMAIN.workers.dev/webhook/telegram\",\"secret_token\":\"${TELEGRAM_WEBHOOK_SECRET}\"}"
+```
+
+### Debug Checklist
+
 | Issue | Solution |
 |-------|----------|
 | Deploy fails | Check `database_id` is valid in wrangler.jsonc |
-| Webhook not receiving | Verify webhook URL and secret token |
+| No logs at all | Run `wrangler tail` first, then test. Check observability is enabled in wrangler.jsonc |
+| Webhook 401 Unauthorized | Secret mismatch - see above fix |
+| Webhook not receiving | Verify `getWebhookInfo` shows correct URL. Check `pending_update_count` is 0 |
 | AI not responding | Check Workers AI binding or API keys |
 | Slack not receiving | Verify webhook URL is correct |
 | Linear issues not created | Check LINEAR_API_KEY and team permissions |
+
+### Testing Webhook Locally
+
+```bash
+# Watch logs
+npx wrangler tail
+
+# In another terminal, test with curl (use your actual secret)
+curl -X POST "https://triage-agent.YOUR_SUBDOMAIN.workers.dev/webhook/telegram" \
+  -H "Content-Type: application/json" \
+  -H "X-Telegram-Bot-Api-Secret-Token: ${TELEGRAM_WEBHOOK_SECRET}" \
+  -d '{"update_id":123,"message":{"message_id":1,"from":{"id":123,"is_bot":false,"first_name":"Test"},"chat":{"id":123,"type":"private"},"date":1710000000,"text":"test"}}'
+```
+
+**Expected:** `{"ok":true}` and logs appear in `wrangler tail`
 
 ## License
 

@@ -113,8 +113,17 @@ export async function ingestUpdate(
 
 function isProcessableUpdate(update: TelegramUpdate): boolean {
   const message = update.message ?? update.edited_message;
-  if (!message) return false;
-  if (!message.from) return false;
-  if (!message.text) return false;
+  if (!message) {
+    logger.info("Skipping: no message or edited_message", { update_id: update.update_id });
+    return false;
+  }
+  if (!message.from) {
+    logger.info("Skipping: no sender (channel post?)", { update_id: update.update_id, chat_id: message.chat?.id });
+    return false;
+  }
+  if (!message.text) {
+    logger.info("Skipping: no text content", { update_id: update.update_id, chat_id: message.chat?.id, type: message.chat?.type });
+    return false;
+  }
   return true;
 }

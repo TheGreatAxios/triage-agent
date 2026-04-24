@@ -21,8 +21,17 @@ webhook.post("/telegram", async (c) => {
   const secret = c.env.TELEGRAM_WEBHOOK_SECRET;
   const secretHeader = c.req.header("X-Telegram-Bot-Api-Secret-Token");
 
+  logger.info("Webhook hit", { 
+    has_secret: !!secret, 
+    has_header: !!secretHeader,
+    path: c.req.path 
+  });
+
   if (!verifyTelegramWebhook(secret, secretHeader)) {
-    logger.warn("Webhook verification failed");
+    logger.warn("Webhook verification failed", { 
+      header_present: !!secretHeader,
+      secret_configured: !!secret 
+    });
     return c.json({ error: "Unauthorized" }, 401);
   }
 
@@ -39,7 +48,7 @@ webhook.post("/telegram", async (c) => {
     return c.json({ error: "Bad request" }, 400);
   }
 
-  logger.info("Received Telegram update", { update_id: update.update_id });
+  logger.info("Received Telegram update", { update_id: update.update_id, chat_id: update.message?.chat?.id ?? update.edited_message?.chat?.id });
 
   const chatId = update.message?.chat.id ?? update.edited_message?.chat.id;
   if (chatId) {
@@ -58,5 +67,6 @@ webhook.post("/telegram", async (c) => {
     })
   );
 
+  logger.info("Webhook acknowledged", { update_id: update.update_id });
   return c.json({ ok: true });
 });
