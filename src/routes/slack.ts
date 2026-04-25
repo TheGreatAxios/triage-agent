@@ -171,13 +171,17 @@ slackRoutes.post("/interactions", async (c) => {
     const callbackId = payload.view.callback_id;
     const stateValues = payload.view.state.values;
 
+    logger.info("Modal submission received", { callbackId, user: payload.user, stateValueKeys: Object.keys(stateValues) });
+
     // Extract selected chat IDs
     const selectedChats: number[] = [];
     for (const blockId of Object.keys(stateValues)) {
       const block = stateValues[blockId];
       for (const actionId of Object.keys(block)) {
         const action = block[actionId];
+        logger.debug("Processing block action", { blockId, actionId, actionType: action.type, hasSelectedOptions: !!action.selected_options });
         if (action.selected_options) {
+          logger.debug("Found selected options", { count: action.selected_options.length, options: action.selected_options });
           for (const opt of action.selected_options) {
             const chatId = parseInt(opt.value, 10);
             if (!isNaN(chatId)) {
@@ -187,6 +191,8 @@ slackRoutes.post("/interactions", async (c) => {
         }
       }
     }
+
+    logger.info("Extracted chat IDs from modal", { count: selectedChats.length, chatIds: selectedChats });
 
     if (selectedChats.length === 0) {
       return c.json({
@@ -216,8 +222,11 @@ slackRoutes.post("/interactions", async (c) => {
     }));
 
     // Process batch (async, don't block response)
+    logger.info("Starting batch process", { decisionCount: decisions.length, action: decisions[0]?.action });
     c.executionCtx.waitUntil(
-      batchProcessApprovals(c.env, decisions).catch((err) => {
+      batchProcessApprovals(c.env, decisions).then((results) => {
+        logger.info("Batch process completed", { results });
+      }).catch((err) => {
         logger.error("Batch approval failed", {
           error: getErrorMessage(err),
         });
