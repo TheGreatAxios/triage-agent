@@ -1,6 +1,6 @@
 {
   "name": "triage-agent",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "private": true,
   "license": "MIT",
   "author": "Sawyer Cutler <sawyer@dirtroad.dev>",
@@ -10,7 +10,7 @@
   },
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "bun run db:migrate:remote && wrangler deploy",
+    "deploy": "bun run db:migrate:remote && wrangler deploy --keep-vars",
     "deploy:skip-migrate": "wrangler deploy",
     "types": "wrangler types",
     "typecheck": "tsc --noEmit",

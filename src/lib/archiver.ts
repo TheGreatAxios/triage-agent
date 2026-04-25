@@ -1,7 +1,8 @@
 import type { Env } from "../types/env";
 import { getConfig } from "./config";
 import { logger } from "./logger";
-import { getOverflowingChats, getMessagesForArchival } from "./queries";
+import { getMessagesForArchival } from "./queries";
+import { getOverflowingChats, decrementHotCount } from "./counters";
 
 /** Maximum number of chats to archive concurrently. */
 const ARCHIVE_CONCURRENCY = 3;
@@ -16,16 +17,19 @@ const ARCHIVE_CONCURRENCY = 3;
  */
 export async function archiveOldMessages(env: Env): Promise<number> {
   const config = getConfig();
-  const { maxHotMessages } = config;
+  const maxHotMessages = config.maxHotMessages;
 
-  // Use centralized query to find overflowing chats
-  const overflows = await getOverflowingChats(env.DB, maxHotMessages);
+  // Use counter-based lookup - O(1) instead of O(n) full table scan
+  // This reads only chats where needs_archival = 1 (single digit rows)
+  // instead of scanning all active_messages and grouping by chat_id
+  const overflows = await getOverflowingChats(env.DB);
 
   if (overflows.length === 0) return 0;
 
   logger.info("Starting archival run", {
     chatCount: overflows.length,
     concurrency: ARCHIVE_CONCURRENCY,
+    maxHotMessages,
   });
 
   // Process chats with limited concurrency
@@ -37,9 +41,10 @@ export async function archiveOldMessages(env: Env): Promise<number> {
     const batch = queue.splice(0, ARCHIVE_CONCURRENCY);
 
     // Process batch concurrently
+    // Note: getOverflowingChats returns {chat_id, hot_count}
     const results = await Promise.allSettled(
-      batch.map(({ chat_id, msg_count }) =>
-        archiveChat(env, chat_id, msg_count, maxHotMessages)
+      batch.map(({ chat_id, hot_count }) =>
+        archiveChat(env, chat_id, hot_count, maxHotMessages)
       )
     );
 
@@ -119,6 +124,10 @@ async function archiveChat(
   )
     .bind(...ids)
     .run();
+
+  // Decrement counter after successful archival
+  // This maintains accurate hot_count for archiver lookups
+  await decrementHotCount(env.DB, chatId, messages.length);
 
   logger.info("Chat archived", {
     chatId,

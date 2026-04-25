@@ -2,7 +2,7 @@
 	"$schema": "./node_modules/wrangler/config-schema.json",
 	"name": "triage-agent",
 	"main": "src/index.ts",
-	"compatibility_date": "2026-04-24",
+	"compatibility_date": "2026-04-23",
 	"compatibility_flags": [
 		"nodejs_compat"
 	],
@@ -10,6 +10,7 @@
 		{
 			"binding": "DB",
 			"database_name": "triage-agent-db",
+			"database_id": "5426be47-1b17-4135-8fe4-14a717c84a63",
 			"migrations_dir": "migrations"
 		}
 	],
@@ -28,9 +29,11 @@
 	],
 	"triggers": {
 		"crons": [
-			"*/30 * * * *",   // Process timers every 30 minutes
+			"*/5 * * * *",    // Process timers every 5 minutes (responsive auto-drafts)
+			"0 */4 * * *",    // Stale chat alerts every 4 hours (matches 4h threshold)
 			"0 16 * * *",     // 8 AM PST (16:00 UTC) - Morning summary
-			"0 0 * * *"       // 4 PM PST (00:00 UTC next day) - Evening summary
+			"0 0 * * *",      // 4 PM PST (00:00 UTC next day) - Evening summary + daily rollup
+			"0 3 * * 0"       // Weekly counter reconciliation (Sunday 3 AM UTC)
 		]
 	},
 	"observability": {

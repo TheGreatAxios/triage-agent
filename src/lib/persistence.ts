@@ -2,6 +2,7 @@ import type { InternalEvent } from "../types/events";
 import type { TelegramChat } from "../types/telegram";
 import type { ClassificationResult } from "../types/classification";
 import { logger } from "./logger";
+import { incrementMessageCounters, incrementClassificationCounter } from "./counters";
 
 export interface PersistResult {
   chatId: number;
@@ -130,6 +131,13 @@ async function insertMessage(
     .first<{ id: number }>();
 
   if (!row) throw new Error(`Failed to insert message ${event.messageId}`);
+
+  // Increment counters for D1 row optimization (non-blocking)
+  // This maintains running totals to eliminate expensive COUNT(*) queries
+  if (result.meta.changes > 0) {
+    await incrementMessageCounters(db, chatId, "messages");
+  }
+
   return row.id;
 }
 
@@ -151,6 +159,10 @@ export async function persistClassification(
     )
     .bind(messageId, chatId, result.label, result.confidence, result.method, result.reasoning)
     .run();
+
+  // Increment classification counter for D1 row optimization
+  // Maintains running totals to eliminate expensive aggregations
+  await incrementClassificationCounter(db, chatId, result.label);
 }
 
 // ============================================================================

@@ -5,6 +5,8 @@ import { health } from "./routes/health";
 import slackRoutes from "./routes/slack";
 import { processTimers, checkApprovalExpirations, sendDailySummaryIfScheduled } from "./pipeline/timer";
 import { archiveOldMessages } from "./lib/archiver";
+import { reconcileCounters, cleanupOldReconciliationLogs } from "./lib/counters/reconciliation";
+import { runDailyRollup } from "./lib/counters/rollup";
 import { logger } from "./lib/logger";
 import { getErrorMessage } from "./lib/errors";
 
@@ -126,6 +128,40 @@ export default {
         sendDailySummaryIfScheduled(env, period).catch((err) => {
           logger.error("Daily summary failed", {
             period,
+            error: getErrorMessage(err),
+          });
+        })
+      );
+    }
+
+    // Daily stats rollup (runs at 00:00 UTC - midnight)
+    // Aggregates yesterday's stats into monthly totals and cleans up old data
+    const isMidnight = hour === 0;
+    if (isMidnight) {
+      ctx.waitUntil(
+        runDailyRollup(env).then((result) => {
+          logger.info("Daily stats rollup complete", result);
+        }).catch((err) => {
+          logger.error("Daily stats rollup failed", {
+            error: getErrorMessage(err),
+          });
+        })
+      );
+    }
+
+    // Weekly counter reconciliation (runs Sunday at 03:00 UTC)
+    // Verifies counters are accurate and fixes any drift
+    const dayOfWeek = new Date().getUTCDay();
+    const isSunday3AM = dayOfWeek === 0 && hour === 3;
+    if (isSunday3AM) {
+      ctx.waitUntil(
+        reconcileCounters(env).then((result) => {
+          logger.info("Counter reconciliation complete", result);
+        }).then(() => {
+          // Clean up old logs after reconciliation
+          return cleanupOldReconciliationLogs(env);
+        }).catch((err) => {
+          logger.error("Counter reconciliation failed", {
             error: getErrorMessage(err),
           });
         })

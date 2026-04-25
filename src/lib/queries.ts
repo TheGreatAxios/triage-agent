@@ -161,6 +161,10 @@ export async function checkChatMessageOverflow(
 /**
  * Get all chats that have exceeded their message limit.
  * 
+ * @deprecated Use getOverflowingChats from lib/counters.ts instead.
+ * This function performs a full table scan and is expensive at scale.
+ * The counters-based version reads only rows where needs_archival = 1.
+ * 
  * @param db - D1 database instance
  * @param maxMessages - Maximum allowed messages per chat
  * @returns Array of chat IDs with their message counts
@@ -170,6 +174,7 @@ export async function getOverflowingChats(
   maxMessages: number
 ): Promise<Array<{ chat_id: number; msg_count: number }>> {
   // Query: Find all chats exceeding the hot storage limit
+  // WARNING: This scans the ENTIRE active_messages table - expensive at scale!
   // HAVING filters post-aggregation (vs WHERE which filters pre-aggregation)
   const { results } = await db
     .prepare(

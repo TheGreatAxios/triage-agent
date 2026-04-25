@@ -461,6 +461,40 @@ Quality scores are used to:
 2. Log tool effectiveness for debugging
 3. Potentially trigger re-execution with different parameters (future)
 
+## Agent Instructions
+
+### DO NOT Output Reports
+
+**NEVER** create markdown reports, validation documents, or summary files in the project directory. Do not create files like:
+- `D1_VALIDATION.md`
+- `IMPLEMENTATION_SUMMARY.md`
+- `OPTIMIZATION_REPORT.md`
+- Any other report-style documentation
+
+### Auto-Create Skills Instead
+
+If you develop a pattern, optimization, or technique that is reusable across projects, **immediately** create a skill in `~/.agents/skills/<skill-name>/`:
+
+```
+~/.agents/skills/
+  <skill-name>/
+    SKILL.md          # Required: Usage instructions, patterns, examples
+    (optional files)  # Scripts, templates, references
+```
+
+**When to create a skill:**
+- Database optimization patterns (e.g., D1 counter tables)
+- Integration patterns (e.g., Stripe webhooks, Slack bots)
+- Architecture patterns (e.g., multi-tenant routing)
+- Testing patterns (e.g., sandbox testing strategies)
+- Any reusable technique worth sharing across projects
+
+**Skill requirements:**
+- `SKILL.md` must be self-contained and actionable
+- Include code examples, not just theory
+- Document trade-offs and when to use/not use
+- No project-specific details (keep it generic)
+
 ## Commands
 
 ```bash
