@@ -197,6 +197,17 @@ slackRoutes.post("/interactions", async (c) => {
       });
     }
 
+    // Security: Limit batch size to prevent abuse
+    const MAX_BATCH_SIZE = 100;
+    if (selectedChats.length > MAX_BATCH_SIZE) {
+      return c.json({
+        response_action: "errors",
+        errors: {
+          selected_chats: `Maximum ${MAX_BATCH_SIZE} chats per batch. Please select fewer chats.`,
+        },
+      });
+    }
+
     const decisions = selectedChats.map((chatId) => ({
       chatId,
       slackUserId: payload.user.id,

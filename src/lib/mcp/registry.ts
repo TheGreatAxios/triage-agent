@@ -73,6 +73,16 @@ export async function addMCPServer(
     projectId = "default",
   } = params;
 
+  // Security: Validate HTTPS URL to prevent SSRF via internal/fake URLs
+  if (!url.startsWith("https://")) {
+    throw new Error("MCP server URL must use HTTPS");
+  }
+  try {
+    new URL(url); // Validate URL format
+  } catch {
+    throw new Error("Invalid MCP server URL format");
+  }
+
   const config = {
     type: "mcp-http" as const,
     url,

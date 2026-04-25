@@ -62,6 +62,7 @@ export function verifySlackRequest(
 
 /**
  * Async wrapper for verification.
+ * Includes 5-minute timestamp freshness check to prevent replay attacks.
  */
 export async function verifySlackRequestAsync(
   signingSecret: string,
@@ -70,6 +71,14 @@ export async function verifySlackRequestAsync(
   signature: string
 ): Promise<boolean> {
   try {
+    // Timestamp freshness check: reject requests older than 5 minutes or future-dated
+    const now = Math.floor(Date.now() / 1000);
+    const requestTime = parseInt(timestamp, 10);
+    if (isNaN(requestTime) || Math.abs(now - requestTime) > 300) {
+      logger.warn("Slack request timestamp invalid or stale", { now, requestTime, diff: now - requestTime });
+      return false;
+    }
+
     const baseString = `v0:${timestamp}:${body}`;
     const encoder = new TextEncoder();
     const keyData = encoder.encode(signingSecret);

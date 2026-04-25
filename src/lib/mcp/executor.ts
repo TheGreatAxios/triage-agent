@@ -52,15 +52,23 @@ async function executeSingleTool(
     const cacheKey = `knowledge/${config.name}/${await hashQuery(query)}`;
     const cached = await env.KNOWLEDGE_CACHE?.get(cacheKey);
     if (cached) {
-      const body = await cached.text();
-      const result = JSON.parse(body);
-      return {
-        tool: config.name,
-        result,
-        fromCache: true,
-        quality: "high",
-        summary: generateSummary(result),
-      };
+      try {
+        const body = await cached.text();
+        const result = JSON.parse(body);
+        return {
+          tool: config.name,
+          result,
+          fromCache: true,
+          quality: "high",
+          summary: generateSummary(result),
+        };
+      } catch (err) {
+        // Cache corrupted or unreadable - proceed to fetch fresh
+        logger.warn("Cache read failed, fetching fresh", {
+          tool: config.name,
+          error: String(err).slice(0, 100),
+        });
+      }
     }
 
     // Get auth token if configured
