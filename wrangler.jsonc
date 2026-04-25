@@ -32,7 +32,7 @@
 			"0 */4 * * *",    // Stale chat alerts every 4 hours (matches 4h threshold)
 			"0 16 * * *",     // 8 AM PST (16:00 UTC) - Morning summary
 			"0 0 * * *",      // 4 PM PST (00:00 UTC next day) - Evening summary + daily rollup
-			"0 3 * * 0"       // Weekly counter reconciliation (Sunday 3 AM UTC)
+			"0 3 * * 7"       // Weekly counter reconciliation (Sunday 3 AM UTC)
 		]
 	},
 	"observability": {
