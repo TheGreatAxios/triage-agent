@@ -308,39 +308,16 @@ export async function openBatchApprovalModal(
                 type: "multi_static_select",
                 placeholder: {
                   type: "plain_text",
-                  text: "Select chats...",
+                  text: "Select chats to approve...",
                 },
                 options,
                 action_id: "chat_selection",
               },
               label: {
                 type: "plain_text",
-                text: "Chats to Approve",
+                text: `Chats to Approve (${pendingApprovals.length} total)`,
               },
               optional: true,
-            },
-            {
-              type: "actions",
-              elements: [
-                {
-                  type: "button",
-                  text: {
-                    type: "plain_text",
-                    text: "Select All",
-                  },
-                  action_id: "select_all",
-                  value: "select_all",
-                },
-                {
-                  type: "button",
-                  text: {
-                    type: "plain_text",
-                    text: "Clear",
-                  },
-                  action_id: "clear_selection",
-                  value: "clear",
-                },
-              ],
             },
           ],
         },
