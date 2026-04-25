@@ -14,6 +14,69 @@ interface Rule {
   reasoning: string;
 }
 
+/**
+ * Rule-based pre-classification for common crypto patterns.
+ * This runs BEFORE AI to prevent false positives where wallet addresses
+ * and transaction messages are incorrectly classified as "bug".
+ */
+export function ruleBasedClassify(text: string): ClassificationResult | null {
+  // Pattern 1: Ethereum wallet address (0x + 40 hex chars)
+  const walletAddressPattern = /\b0x[a-fA-F0-9]{40}\b/;
+  if (walletAddressPattern.test(text)) {
+    return {
+      label: "normal",
+      confidence: 0.99,
+      method: "rule",
+      reasoning: "Contains wallet address - crypto transaction pattern, not a bug report",
+    };
+  }
+
+  // Pattern 2: Transaction confirmation keywords
+  const transactionPatterns = [
+    /\bsent\s+[\d,.]+[kK]?\s*(usdc|usdt|eth|btc|sol|tokens?)/i,
+    /\breceived\s+[\d,.]+[kK]?\s*(usdc|usdt|eth|btc|sol|tokens?)/i,
+    /\bdropped\s+[\d,.]+[kK]?\s*(usdc|usdt|eth|btc|sol)/i,
+    /\bwallet\s+(address|addr)\s*:?\s*0x/i,
+    /\btransfer(red)?\s+[\d,.]+/i,
+    /\bdeposit(ed)?\s+[\d,.]+/i,
+    /\bwithdraw(al)?\s+[\d,.]+/i,
+    /\bswap(ped)?\s+[\d,.]+/i,
+    /\btx\s+(hash|id)\s*:?\s*0x[a-fA-F0-9]{64}/i,
+  ];
+
+  for (const pattern of transactionPatterns) {
+    if (pattern.test(text)) {
+      return {
+        label: "normal",
+        confidence: 0.98,
+        method: "rule",
+        reasoning: "Transaction/transfer message - operational crypto activity, not a bug",
+      };
+    }
+  }
+
+  // Pattern 3: Balance/status checks
+  const statusPatterns = [
+    /\bbalance\s*:?\s*[\d,.]+/i,
+    /\bposition\s+(size|value)\s*:?\s*[\d,.]+/i,
+    /\bpnl\s*[:=]\s*[\d,.]+/i,
+  ];
+
+  for (const pattern of statusPatterns) {
+    if (pattern.test(text)) {
+      return {
+        label: "normal",
+        confidence: 0.97,
+        method: "rule",
+        reasoning: "Balance/position status update, not a bug report",
+      };
+    }
+  }
+
+  // No rule matched - proceed to AI classification
+  return null;
+}
+
 const RULES: Rule[] = [
   {
     label: "bug",
@@ -49,6 +112,17 @@ const RULES: Rule[] = [
  * If no rules match, returns "unknown" for potential model fallback.
  */
 export function classifyByRules(event: InternalEvent): ClassificationResult {
+  // Check crypto-specific patterns first (wallet addresses, transactions)
+  const cryptoResult = ruleBasedClassify(event.text);
+  if (cryptoResult) {
+    logger.info("Rule-based classification applied", {
+      label: cryptoResult.label,
+      confidence: cryptoResult.confidence,
+      source: "rule_based",
+    });
+    return cryptoResult;
+  }
+
   if (event.sender.isBot) {
     return {
       label: "normal",
@@ -130,8 +204,38 @@ function isLikelyNormal(text: string): boolean {
   return normalPatterns.some((p) => p.test(trimmed));
 }
 
-const CLASSIFICATION_PROMPT = `Classify:bug/request/normal.
-Reply:JSON{"label":"X","confidence":0.X}`;
+const NEGATIVE_EXAMPLES = `
+Examples that are NOT bugs (classify as 'normal'):
+- "sent 100K USDC to 0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb" - this is a transaction confirmation
+- "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb" - this is just a wallet address being shared
+- "received 50 ETH" - this is a transfer notification
+- "wallet address: 0x..." - this is sharing contact info
+- "my balance is 1000 USDC" - this is a status update
+- "dropped 25K tokens" - this is a transfer, not an error
+- "tx hash: 0xabc123..." - this is a transaction reference
+
+Examples that ARE bugs:
+- "I can't connect my wallet, getting error 0x..."
+- "Transaction failed with revert error"
+- "My balance shows 0 but I deposited yesterday"
+- "The app crashes when I click swap"
+- "Getting 'insufficient funds' error even with balance"
+`;
+
+const CLASSIFICATION_PROMPT = `You are a support ticket classifier. Analyze the message and classify it.
+
+${NEGATIVE_EXAMPLES}
+
+Classification Rules:
+1. 'bug' - Something is broken, error messages, crashes, unexpected behavior
+2. 'request' - Feature request, enhancement, "how do I..."
+3. 'normal' - General chat, transaction confirmations, status updates, wallet addresses being shared
+4. 'unknown' - Cannot determine from message alone
+
+IMPORTANT: Hex strings like 0x... are usually wallet addresses or transaction IDs in crypto contexts, NOT error codes.
+
+Respond in JSON format:
+{"label":"bug|request|normal|unknown","confidence":0.0-1.0,"reasoning":"brief explanation"}`;
 
 /**
  * Full classification pipeline: rules first, model fallback if ambiguous.

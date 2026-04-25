@@ -18,7 +18,11 @@
     "db:migrate:remote": "wrangler d1 migrations apply triage-agent-db --remote",
     "mcp:add": "bun run scripts/add-mcp.ts",
     "mcp:list": "bun run scripts/list-mcp.ts",
-    "mcp:remove": "bun run scripts/remove-mcp.ts"
+    "mcp:remove": "bun run scripts/remove-mcp.ts",
+    "team:add": "bun run scripts/manage-team.ts add",
+    "team:list": "bun run scripts/manage-team.ts list",
+    "team:remove": "bun run scripts/manage-team.ts remove",
+    "team:update": "bun run scripts/manage-team.ts update"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^1.2.12",

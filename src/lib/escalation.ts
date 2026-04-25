@@ -23,12 +23,30 @@ export interface EscalationResult {
 
 /**
  * Send a Slack escalation and persist the result.
+ * Includes idempotency check: skips if escalation sent in last 5 minutes.
  */
 export async function escalateToSlack(
   db: D1Database,
   slackWebhookUrl: string,
   ctx: EscalationContext
 ): Promise<EscalationResult> {
+  // Idempotency check: Did we already escalate this chat recently?
+  const recentEscalation = await db
+    .prepare(
+      `SELECT id FROM escalations
+       WHERE chat_id = ?
+       AND created_at > datetime('now', '-5 minutes')
+       ORDER BY created_at DESC
+       LIMIT 1`
+    )
+    .bind(ctx.chatId)
+    .first<{ id: number }>();
+
+  if (recentEscalation) {
+    logger.info("Recent escalation exists - skipping duplicate", { chatId: ctx.chatId, escalationId: recentEscalation.id });
+    return { escalationId: recentEscalation.id, slackMessageTs: null, delivered: true };
+  }
+
   const escalationId = await persistEscalation(
     db,
     ctx.chatId,

@@ -11,6 +11,12 @@ import { logger } from "../lib/logger";
 import { handleBotAddedToChat, handleBotRemovedFromChat } from "../lib/approval";
 import { getErrorMessage } from "../lib/errors";
 import { loadMCPServers, executeTools, formatToolContext, type ToolResult } from "../lib/mcp";
+import {
+  isTeamMember,
+  recordTeamTouch,
+  ensureFirstCustomerMessage,
+  getTeamMemberByUsername,
+} from "../lib/team";
 
 /**
  * Full ingestion pipeline: validate → normalize → persist.
@@ -41,6 +47,7 @@ export async function ingestUpdate(
     return null;
   }
 
+  // Normalize the update to internal event format
   const event = normalizeUpdate(update);
   if (!event) {
     logger.debug("Normalizer returned null", { update_id: update.update_id });
@@ -49,6 +56,18 @@ export async function ingestUpdate(
 
   const message = update.message ?? update.edited_message;
   if (!message) return null;
+
+  // IDEMPOTENCY: Check if this exact message was already processed
+  const existingMessage = await env.DB.prepare(
+    `SELECT am.id FROM active_messages am
+     JOIN chats c ON c.id = am.chat_id
+     WHERE am.telegram_message_id = ? AND c.telegram_chat_id = ?`
+  ).bind(event.messageId, event.chatId).first<{ id: number }>();
+
+  if (existingMessage) {
+    logger.info("Message already processed - skipping", { messageId: event.messageId, chatId: event.chatId });
+    return event;
+  }
 
   // APPROVAL GATE: Check if chat is approved before processing messages
   const chatRecord = await getChatByTelegramId(env.DB, message.chat.id);
@@ -79,11 +98,35 @@ export async function ingestUpdate(
     throw err;
   }
 
+  // TEAM DETECTION: Check if sender is a team member
+  const senderUsername = event.sender.username || event.sender.name;
+  const isTeam = await isTeamMember(env.DB, senderUsername);
+
+  if (isTeam) {
+    // Get team member details
+    const teamMember = await getTeamMemberByUsername(env.DB, senderUsername);
+    if (teamMember) {
+      // Record this touch
+      await recordTeamTouch(env.DB, dbChatId, teamMember.id, event.timestamp);
+
+      // Cancel any pending timers since human is handling
+      await cancelTimers(env.DB, dbChatId);
+
+      logger.info("Team member response - skipping AI pipeline", { chatId: dbChatId, teamMember: teamMember.telegramUsername });
+
+      // Skip AI processing entirely - human is handling
+      return event;
+    }
+  } else {
+    // Not a team member - this might be the first customer message
+    await ensureFirstCustomerMessage(env.DB, dbChatId, senderUsername, event.timestamp);
+  }
+
   try {
     await updateConversationState(env.DB, dbChatId, event);
 
-    // Cancel any pending timers when a human responds
-    if (!event.sender.isBot) {
+    // Cancel any pending timers when a human responds (non-bot, non-team)
+    if (!event.sender.isBot && !isTeam) {
       await cancelTimers(env.DB, dbChatId);
     }
   } catch (err) {

@@ -4,11 +4,20 @@ import { getFiredTimers, markTimerFired } from "../lib/state";
 import { handleResponse } from "./respond";
 import { logger } from "../lib/logger";
 import { expirePendingApprovals } from "../lib/approval";
-import { sendDailySummary } from "../lib/slack";
+import { sendDailySummary as sendApprovalDailySummary, sendStaleAlert, sendDailySummaryWebhook } from "../lib/slack";
 import { calculateAndStoreDailyStats } from "../lib/persistence";
 import { loadMCPServers, executeTools, formatToolContext } from "../lib/mcp";
 import { getRecentMessagesWithSenders } from "../lib/queries";
 import { getErrorMessage } from "../lib/errors";
+import {
+  getStaleChats,
+  recordStaleAlert,
+  calculateDailyMetrics,
+  checkDuplicateSummary,
+  recordSummarySent,
+  isTimerProcessed,
+  recordTimerProcessed,
+} from "../lib/team";
 
 /**
  * Process all fired timers (called from scheduled handler).
@@ -24,6 +33,13 @@ export async function processTimers(env: Env): Promise<number> {
   let processed = 0;
 
   for (const timer of timers) {
+    // IDEMPOTENCY: Check if this timer was already processed recently
+    const alreadyProcessed = await isTimerProcessed(env.DB, timer.id);
+    if (alreadyProcessed) {
+      logger.info("Timer already processed recently - skipping", { timerId: timer.id });
+      continue;
+    }
+
     try {
       const classification = await getLatestClassification(env.DB, timer.chatId);
 
@@ -66,6 +82,7 @@ export async function processTimers(env: Env): Promise<number> {
       }
 
       await markTimerFired(env.DB, timer.id);
+      await recordTimerProcessed(env.DB, timer.id);
       processed++;
 
       logger.info("Timer processed", {
@@ -80,6 +97,64 @@ export async function processTimers(env: Env): Promise<number> {
         error: getErrorMessage(err),
       });
     }
+  }
+
+  // Check for stale chats needing attention (4+ hours no response)
+  try {
+    const staleChats = await getStaleChats(env.DB, 4); // 4 hour threshold
+    for (const staleChat of staleChats) {
+      // Idempotency: Check if we already sent this alert
+      const alertRecorded = await recordStaleAlert(env.DB, staleChat.chatId, "stale_4h");
+      if (alertRecorded) {
+        // Only send if not already sent - pass webhook URL from env
+        await sendStaleAlert(env.DB, {
+          chatId: staleChat.chatId,
+          chatTitle: staleChat.chatTitle || `Chat ${staleChat.chatId}`,
+          customerWaitingHours: staleChat.customerWaitingHours,
+          lastTeamTouchAt: staleChat.lastTeamTouchAt,
+          lastTeamMemberName: staleChat.lastTeamMemberName,
+        }, env.SLACK_WEBHOOK_URL);
+      } else {
+        logger.info("Stale alert already sent - skipping duplicate", { chatId: staleChat.chatId });
+      }
+    }
+  } catch (err) {
+    logger.error("Failed to process stale chats", { error: getErrorMessage(err) });
+  }
+
+  // Daily aggregation runs once per day
+  try {
+    const today = new Date().toISOString().split("T")[0];
+    const hour = new Date().getUTCHours();
+
+    // Morning summary at 9 AM UTC, evening at 21:00 UTC
+    const isMorningSummaryTime = hour === 9;
+    const isEveningSummaryTime = hour === 21;
+
+    if (isMorningSummaryTime || isEveningSummaryTime) {
+      const period = isMorningSummaryTime ? "morning" : "evening";
+
+      // Idempotency check: Did we already send today?
+      const duplicateCheck = await checkDuplicateSummary(env.DB, today, period);
+
+      if (!duplicateCheck.sent) {
+        // Calculate daily metrics first
+        await calculateDailyMetrics(env.DB, today);
+
+        // Send summary via webhook
+        const summaryResult = await sendDailySummaryWebhook(env.DB, today, period, env.SLACK_WEBHOOK_URL);
+
+        if (summaryResult.success) {
+          // Record that we sent it (idempotency)
+          await recordSummarySent(env.DB, today, period, summaryResult.channel || "unknown", summaryResult.messageTs || Date.now().toString());
+          logger.info("Daily summary sent", { date: today, period, messageTs: summaryResult.messageTs });
+        }
+      } else {
+        logger.info("Daily summary already sent - skipping duplicate", { date: today, period, existingTs: duplicateCheck.slackMessageTs });
+      }
+    }
+  } catch (err) {
+    logger.error("Failed to process daily summary", { error: getErrorMessage(err) });
   }
 
   return processed;
@@ -159,7 +234,7 @@ export async function sendDailySummaryIfScheduled(
     const stats = await calculateAndStoreDailyStats(env.DB, dateStr, period);
 
     // Send to Slack
-    await sendDailySummary(env.SLACK_BOT_TOKEN, env.SLACK_SUMMARY_CHANNEL_ID, {
+    await sendApprovalDailySummary(env.SLACK_BOT_TOKEN, env.SLACK_SUMMARY_CHANNEL_ID, {
       date: dateStr,
       period,
       totalChats: stats.totalChats,
