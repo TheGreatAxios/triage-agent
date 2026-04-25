@@ -63,19 +63,25 @@ slackRoutes.post("/interactions", async (c) => {
     return c.json({ error: "Unauthorized" }, 401);
   }
 
+  logger.info("Slack interaction received", { timestamp, signature: signature.slice(0, 20) });
+
   // Parse payload (url-encoded)
   const params = new URLSearchParams(rawBody);
   const payloadStr = params.get("payload");
   if (!payloadStr) {
+    logger.warn("Missing payload in Slack interaction");
     return c.json({ error: "Missing payload" }, 400);
   }
 
   let payload: ApprovalSlackPayload;
   try {
     payload = JSON.parse(payloadStr);
-  } catch {
+  } catch (err) {
+    logger.error("Failed to parse Slack payload", { error: String(err), payloadPreview: payloadStr.slice(0, 100) });
     return c.json({ error: "Invalid payload" }, 400);
   }
+
+  logger.info("Slack payload parsed", { type: payload.type, callbackId: payload.view?.callback_id, actionId: payload.actions?.[0]?.action_id });
 
   // Handle block actions (button clicks)
   if (payload.type === "block_actions" && payload.actions) {
@@ -101,7 +107,16 @@ slackRoutes.post("/interactions", async (c) => {
 
     // Handle special actions
     if (action.action_id === "open_batch_modal") {
-      logger.info("Opening batch modal", { triggerId: payload.trigger_id, user: payload.user });
+      logger.info("Opening batch modal", { triggerId: payload.trigger_id, user: payload.user, hasToken: !!c.env.SLACK_BOT_TOKEN });
+
+      if (!payload.trigger_id) {
+        logger.error("Missing trigger_id for batch modal");
+        return c.json({
+          response_type: "ephemeral",
+          text: "Error: Missing trigger_id. Cannot open modal.",
+        });
+      }
+
       const pending = await getPendingApprovals(c.env.DB, "pending");
       logger.info("Found pending approvals", { count: pending.length });
 
@@ -114,7 +129,7 @@ slackRoutes.post("/interactions", async (c) => {
 
       const opened = await openBatchApprovalModal(
         c.env.SLACK_BOT_TOKEN,
-        payload.trigger_id || "",
+        payload.trigger_id,
         pending.map((p) => ({
           id: p.id,
           chatId: p.chatId,
@@ -127,6 +142,13 @@ slackRoutes.post("/interactions", async (c) => {
       );
 
       logger.info("Batch modal open result", { opened });
+
+      if (!opened) {
+        return c.json({
+          response_type: "ephemeral",
+          text: "Failed to open batch modal. Check logs for details.",
+        });
+      }
 
       // Return empty 200 OK - modal opened via views.open API
       return c.body(null, 200);
