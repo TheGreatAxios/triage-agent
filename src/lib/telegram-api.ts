@@ -1,7 +1,7 @@
 /** Telegram Bot API helpers for approval flow operations. */
 
 import type { BotMetadata } from "../types/approval";
-import type { TelegramUser, TelegramChat } from "../types/telegram";
+import type { TelegramUser, TelegramChat, TelegramChatMember } from "../types/telegram";
 import { logger } from "./logger";
 import { getErrorMessage } from "./errors";
 
@@ -198,6 +198,57 @@ export async function getChatMemberCount(
     });
     return null;
   }
+}
+
+/**
+ * Get chat member info for a specific user.
+ * Returns null if user is not in chat or API error.
+ */
+export async function getChatMember(
+  telegramChatId: number,
+  userId: number,
+  botToken: string
+): Promise<TelegramChatMember | null> {
+  try {
+    const resp = await fetch(`${TELEGRAM_API_BASE}${botToken}/getChatMember`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: telegramChatId, user_id: userId }),
+    });
+
+    const data = await resp.json() as TelegramApiResponse<TelegramChatMember>;
+
+    if (!data.ok) {
+      logger.warn("Failed to get chat member", {
+        telegram_chat_id: telegramChatId,
+        user_id: userId,
+        error: data.description,
+      });
+      return null;
+    }
+
+    return data.result ?? null;
+  } catch (err) {
+    logger.error("Error getting chat member", {
+      telegram_chat_id: telegramChatId,
+      user_id: userId,
+      error: getErrorMessage(err),
+    });
+    return null;
+  }
+}
+
+/**
+ * Check if a user is an admin or creator of the chat.
+ */
+export async function isUserAdmin(
+  telegramChatId: number,
+  userId: number,
+  botToken: string
+): Promise<boolean> {
+  const member = await getChatMember(telegramChatId, userId, botToken);
+  if (!member) return false;
+  return member.status === "administrator" || member.status === "creator";
 }
 
 interface TelegramMessage {

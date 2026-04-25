@@ -22,6 +22,7 @@ import {
   buildExpirationMessage,
   buildActivationMessage,
   getChatMemberCount,
+  isUserAdmin,
 } from "./telegram-api";
 import {
   getChatById,
@@ -267,6 +268,45 @@ export async function handleBotAddedToChat(
       telegram_chat_id: chat.id,
     });
     return false;
+  }
+
+  // Check if added by admin - auto approve
+  const addedByAdmin = await isUserAdmin(chat.id, from.id, env.TELEGRAM_BOT_TOKEN);
+  if (addedByAdmin) {
+    logger.info("Bot added by admin, auto-approving", {
+      telegram_chat_id: chat.id,
+      admin: from.username || from.first_name,
+    });
+
+    // Create or get chat record
+    let targetChatId: number;
+    if (!chatRecord) {
+      const newChat = await createOrUpdateChat(env.DB, {
+        telegramChatId: chat.id,
+        type: chat.type,
+        title: chat.title || null,
+        username: chat.username || null,
+        approvalStatus: "approved",
+      });
+      targetChatId = newChat.id;
+    } else {
+      await updateChatApprovalStatus(env.DB, chatRecord.id, "approved", `admin:${from.username || from.first_name}`);
+      targetChatId = chatRecord.id;
+    }
+
+    // Record membership event
+    await recordMembershipEvent(env.DB, targetChatId, "auto_approved_admin", from.username || from.first_name, {
+      admin_user_id: from.id,
+    });
+
+    // Send activation message if enabled
+    const notifyOnApproval = env.NOTIFY_ON_APPROVAL === "true";
+    if (notifyOnApproval) {
+      const activationMsg = buildActivationMessage(botMeta.username);
+      await sendMessage(chat.id, activationMsg, env.TELEGRAM_BOT_TOKEN);
+    }
+
+    return true;
   }
 
   // Create or update chat record

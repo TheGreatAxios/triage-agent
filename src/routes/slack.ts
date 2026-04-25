@@ -90,22 +90,9 @@ slackRoutes.post("/interactions", async (c) => {
       return c.json({ ok: true });
     }
 
-    const chatId = parseInt(action.value, 10);
-    if (isNaN(chatId)) {
-      return c.json({ error: "Invalid chat ID" }, 400);
-    }
+    logger.info("Processing block action", { actionId: action.action_id, blockId: action.block_id, value: action.value });
 
-    const decision = {
-      chatId,
-      slackUserId: payload.user.id,
-      slackUserName: payload.user.name || payload.user.username,
-      action: action.action_id === "approve_chat" ? "approve" as const :
-              action.action_id === "reject_chat" ? "reject" as const :
-              action.action_id === "unblacklist_chat" ? "unblacklist" as const :
-              "approve" as const,
-    };
-
-    // Handle special actions
+    // Handle special actions FIRST (before parsing chat ID)
     if (action.action_id === "open_batch_modal") {
       logger.info("Opening batch modal", { triggerId: payload.trigger_id, user: payload.user, hasToken: !!c.env.SLACK_BOT_TOKEN });
 
@@ -182,7 +169,22 @@ slackRoutes.post("/interactions", async (c) => {
       return c.json({ ok: true });
     }
 
-    // Handle approval/rejection/unblacklist
+    // Handle approval/rejection/unblacklist (requires chat ID)
+    const chatId = parseInt(action.value, 10);
+    if (isNaN(chatId)) {
+      return c.json({ error: "Invalid chat ID" }, 400);
+    }
+
+    const decision = {
+      chatId,
+      slackUserId: payload.user.id,
+      slackUserName: payload.user.name || payload.user.username,
+      action: action.action_id === "approve_chat" ? "approve" as const :
+              action.action_id === "reject_chat" ? "reject" as const :
+              action.action_id === "unblacklist_chat" ? "unblacklist" as const :
+              "approve" as const,
+    };
+
     let result: { success: boolean; message: string };
 
     if (action.action_id === "approve_chat") {
