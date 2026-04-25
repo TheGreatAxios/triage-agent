@@ -340,7 +340,8 @@ slackRoutes.post("/commands", async (c) => {
       });
     }
 
-    return c.json({ ok: true });
+    // Return empty 200 OK - modal is already opened via views.open API
+    return c.body(null, 200);
   }
 
   // Handle /batch-reject
@@ -373,7 +374,8 @@ slackRoutes.post("/commands", async (c) => {
       });
     }
 
-    return c.json({ ok: true });
+    // Return empty 200 OK - modal is already opened via views.open API
+    return c.body(null, 200);
   }
 
   // Handle /rejected-chats (blacklist view)
