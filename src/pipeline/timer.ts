@@ -127,9 +127,10 @@ export async function processTimers(env: Env): Promise<number> {
     const today = new Date().toISOString().split("T")[0];
     const hour = new Date().getUTCHours();
 
-    // Morning summary at 9 AM UTC, evening at 21:00 UTC
-    const isMorningSummaryTime = hour === 9;
-    const isEveningSummaryTime = hour === 21;
+    // Morning summary at 16:00 UTC (8 AM PST), evening at 00:00 UTC (4 PM PST)
+    // Note: These times match the crons in wrangler.jsonc
+    const isMorningSummaryTime = hour === 16;
+    const isEveningSummaryTime = hour === 0;
 
     if (isMorningSummaryTime || isEveningSummaryTime) {
       const period = isMorningSummaryTime ? "morning" : "evening";
@@ -230,11 +231,22 @@ export async function sendDailySummaryIfScheduled(
     const now = new Date();
     const dateStr = now.toISOString().split("T")[0];
 
+    // IDEMPOTENCY: Check if we already sent this summary
+    const duplicateCheck = await checkDuplicateSummary(env.DB, dateStr, period);
+    if (duplicateCheck.sent) {
+      logger.info("Daily summary already sent - skipping duplicate", {
+        date: dateStr,
+        period,
+        existingTs: duplicateCheck.slackMessageTs,
+      });
+      return;
+    }
+
     // Calculate and store stats
     const stats = await calculateAndStoreDailyStats(env.DB, dateStr, period);
 
     // Send to Slack
-    await sendApprovalDailySummary(env.SLACK_BOT_TOKEN, env.SLACK_SUMMARY_CHANNEL_ID, {
+    const summaryResult = await sendApprovalDailySummary(env.SLACK_BOT_TOKEN, env.SLACK_SUMMARY_CHANNEL_ID, {
       date: dateStr,
       period,
       totalChats: stats.totalChats,
@@ -249,7 +261,16 @@ export async function sendDailySummaryIfScheduled(
       approvalDecisions: stats.approvalDecisions,
     });
 
-    logger.info("Daily summary sent", { date: dateStr, period });
+    // Record that we sent it (idempotency)
+    await recordSummarySent(
+      env.DB,
+      dateStr,
+      period,
+      summaryResult.channel || "unknown",
+      summaryResult.messageTs || Date.now().toString()
+    );
+
+    logger.info("Daily summary sent", { date: dateStr, period, messageTs: summaryResult.messageTs });
   } catch (err) {
     logger.error("Failed to send daily summary", {
       period,

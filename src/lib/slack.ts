@@ -543,7 +543,7 @@ export async function sendDailySummary(
     activeChats: number;
     approvalDecisions: number;
   }
-): Promise<void> {
+): Promise<SlackSendResult> {
   try {
     const periodLabel = stats.period === "morning" ? "🌅 Morning Summary" : "🌆 Evening Summary";
     const periodDesc = stats.period === "morning"
@@ -633,16 +633,26 @@ export async function sendDailySummary(
     ];
 
     const text = `${periodLabel}: ${stats.totalChats} chats, ${stats.totalMessages} messages`;
-    await postSlackMessage(botToken, channelId, text, blocks);
+    const result = await postSlackMessage(botToken, channelId, text, blocks);
 
     logger.info("Daily summary sent to Slack", {
       date: stats.date,
       period: stats.period,
     });
+
+    return {
+      success: true,
+      channel: result.channel || channelId,
+      messageTs: result.ts || Date.now().toString(),
+    };
   } catch (err) {
     logger.error("Failed to send daily summary", {
       error: getErrorMessage(err),
     });
+    return {
+      success: false,
+      error: getErrorMessage(err),
+    };
   }
 }
 
