@@ -19,6 +19,12 @@ export interface AppConfig {
   linkValidationPenalty: number;
   /** Timeout in ms for link validation checks */
   linkValidationTimeout: number;
+  /** Milliseconds before agent execution times out (60s default) */
+  agentTimeoutMs: number;
+  /** Seconds to debounce messages before triggering agent (20s default) */
+  agentDebounceSeconds: number;
+  /** Max solution attempts before forcing human escalation (3 default) */
+  agentMaxSolutionAttempts: number;
 }
 
 export const defaultConfig: AppConfig = {
@@ -30,6 +36,9 @@ export const defaultConfig: AppConfig = {
   autoSendLabels: ["normal"],
   linkValidationPenalty: 0.1,
   linkValidationTimeout: 5000,
+  agentTimeoutMs: 60000,
+  agentDebounceSeconds: 20,
+  agentMaxSolutionAttempts: 3,
 };
 
 export function getConfig(): AppConfig {

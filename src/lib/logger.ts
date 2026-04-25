@@ -7,12 +7,12 @@ interface LogEntry {
   [key: string]: unknown;
 }
 
-function log(level: LogLevel, message: string, data?: Record<string, unknown>) {
+function log(level: LogLevel, message: string, data?: object) {
   const entry: LogEntry = {
     level,
     message,
     timestamp: new Date().toISOString(),
-    ...data,
+    ...data as Record<string, unknown>,
   };
 
   const fn = level === "error" ? console.error : level === "warn" ? console.warn : console.log;
@@ -20,8 +20,8 @@ function log(level: LogLevel, message: string, data?: Record<string, unknown>) {
 }
 
 export const logger = {
-  debug: (msg: string, data?: Record<string, unknown>) => log("debug", msg, data),
-  info: (msg: string, data?: Record<string, unknown>) => log("info", msg, data),
-  warn: (msg: string, data?: Record<string, unknown>) => log("warn", msg, data),
-  error: (msg: string, data?: Record<string, unknown>) => log("error", msg, data),
+  debug: (msg: string, data?: object) => log("debug", msg, data),
+  info: (msg: string, data?: object) => log("info", msg, data),
+  warn: (msg: string, data?: object) => log("warn", msg, data),
+  error: (msg: string, data?: object) => log("error", msg, data),
 };

@@ -193,10 +193,86 @@ export async function getOverflowingChats(
 
 /**
  * Build a formatted context string from messages for AI prompts.
- * 
+ *
  * @param messages - Array of messages with sender info
  * @returns Formatted string for prompt context
  */
 export function buildMessageContext(messages: MessageWithSender[]): string {
   return messages.map((m) => `[${m.display_name}]: ${m.text ?? ""}`).join("\n");
+}
+
+/**
+ * Previous draft with optional user response
+ */
+export interface DraftWithResponse {
+  draftId: number;
+  content: string;
+  confidence: number;
+  sentAt: string;
+  userResponse?: string;
+}
+
+/**
+ * Get recent drafts with user responses for agent context.
+ *
+ * Returns drafts sent by the agent and any user messages that followed.
+ *
+ * @param db - D1 database instance
+ * @param chatId - Internal chat ID
+ * @param limit - Maximum drafts to fetch
+ * @returns Array of drafts with user responses
+ */
+export async function getRecentDraftsWithResponses(
+  db: D1Database,
+  chatId: number,
+  limit: number = 5
+): Promise<DraftWithResponse[]> {
+  // Query: Get recent drafts
+  const { results: drafts } = await db
+    .prepare(
+      `SELECT
+        d.id as draft_id,
+        d.content,
+        d.response_confidence as confidence,
+        d.sent_at
+       FROM drafts d
+       WHERE d.chat_id = ? AND d.status = 'sent'
+       ORDER BY d.sent_at DESC
+       LIMIT ?`
+    )
+    .bind(chatId, limit)
+    .all<{
+      draft_id: number;
+      content: string;
+      confidence: number;
+      sent_at: string;
+    }>();
+
+  // For each draft, try to find the next user message after it was sent
+  const result: DraftWithResponse[] = [];
+
+  for (const draft of drafts) {
+    const userResponse = await db
+      .prepare(
+        `SELECT text
+         FROM active_messages
+         WHERE chat_id = ?
+         AND created_at > ?
+         AND sender_id IN (SELECT id FROM chat_participants WHERE is_bot = 0)
+         ORDER BY created_at ASC
+         LIMIT 1`
+      )
+      .bind(chatId, draft.sent_at)
+      .first<{ text: string }>();
+
+    result.push({
+      draftId: draft.draft_id,
+      content: draft.content,
+      confidence: draft.confidence,
+      sentAt: draft.sent_at,
+      userResponse: userResponse?.text || undefined,
+    });
+  }
+
+  return result.reverse(); // Oldest first
 }

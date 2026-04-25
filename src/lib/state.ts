@@ -12,6 +12,13 @@ export interface ConversationState {
   triggerAt: string | null;
   messageCount: number;
   updatedAt: string;
+  // Agent tracking fields (from migration 0007)
+  agentDraftPending?: boolean;
+  lastDraftSentAt?: string | null;
+  lastDraftId?: number | null;
+  resolutionStatus?: string;
+  solutionAttemptCount?: number;
+  threadConfidenceScore?: number;
 }
 
 export interface Timer {

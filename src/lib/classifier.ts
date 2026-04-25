@@ -15,11 +15,11 @@ interface Rule {
 }
 
 /**
- * Rule-based pre-classification for common crypto patterns.
- * This runs BEFORE AI to prevent false positives where wallet addresses
- * and transaction messages are incorrectly classified as "bug".
+ * TIER 1: Regex Pre-Filter
+ * Fast, cheap pattern matching for common cases that don't need AI.
+ * Returns null if no match (proceed to Tier 2).
  */
-export function ruleBasedClassify(text: string): ClassificationResult | null {
+export function regexPreFilter(text: string): ClassificationResult | null {
   // Pattern 1: Ethereum wallet address (0x + 40 hex chars)
   const walletAddressPattern = /\b0x[a-fA-F0-9]{40}\b/;
   if (walletAddressPattern.test(text)) {
@@ -73,8 +73,52 @@ export function ruleBasedClassify(text: string): ClassificationResult | null {
     }
   }
 
-  // No rule matched - proceed to AI classification
+  // Pattern 4: Simple bot commands
+  if (/^\//.test(text.trim())) {
+    return {
+      label: "normal",
+      confidence: 1.0,
+      method: "rule",
+      reasoning: "Bot command - no response needed",
+    };
+  }
+
+  // No regex match - proceed to Tier 2
   return null;
+}
+
+/**
+ * TIER 1.5: Acknowledgment/Resolution Detection
+ * Detect simple positive acknowledgments that indicate resolution.
+ * Returns "acknowledgment" classification for agent to handle.
+ */
+export function detectAcknowledgment(text: string): ClassificationResult | null {
+  const acknowledgmentPatterns = [
+    /^(thanks|thank you|ty|thx|tysm)\b/i,
+    /^(got it|understood|makes sense|i see)\b/i,
+    /^(perfect|awesome|great|nice|cool|👍|👌|✅|💯)$/i,
+    /^(worked|fixed it|solved it|all good|works now)\b/i,
+  ];
+
+  for (const pattern of acknowledgmentPatterns) {
+    if (pattern.test(text.trim())) {
+      return {
+        label: "normal",
+        confidence: 0.95,
+        method: "rule",
+        reasoning: "User acknowledgment - may indicate resolution or satisfaction",
+      };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * @deprecated Use regexPreFilter instead. Kept for backwards compatibility.
+ */
+export function ruleBasedClassify(text: string): ClassificationResult | null {
+  return regexPreFilter(text);
 }
 
 const RULES: Rule[] = [
@@ -105,22 +149,29 @@ const RULES: Rule[] = [
 ];
 
 /**
- * Classify a message using rule-based heuristics.
- * Returns a structured result with label, confidence, and method.
- *
- * Commands and bot messages are classified as "normal" immediately.
- * If no rules match, returns "unknown" for potential model fallback.
+ * TIER 2: Rule-Based Classification
+ * Keyword-based classification for bug/request detection.
+ * Returns "unknown" for ambiguous cases that should be elevated to the Agent (Tier 3).
  */
 export function classifyByRules(event: InternalEvent): ClassificationResult {
-  // Check crypto-specific patterns first (wallet addresses, transactions)
-  const cryptoResult = ruleBasedClassify(event.text);
-  if (cryptoResult) {
-    logger.info("Rule-based classification applied", {
-      label: cryptoResult.label,
-      confidence: cryptoResult.confidence,
-      source: "rule_based",
+  // Tier 1: Fast regex pre-filter
+  const preFilterResult = regexPreFilter(event.text);
+  if (preFilterResult) {
+    logger.debug("Tier 1 regex pre-filter matched", {
+      label: preFilterResult.label,
+      confidence: preFilterResult.confidence,
     });
-    return cryptoResult;
+    return preFilterResult;
+  }
+
+  // Tier 1.5: Check for acknowledgments (may need agent for resolution detection)
+  const ackResult = detectAcknowledgment(event.text);
+  if (ackResult) {
+    // Return acknowledgment for potential agent elevation
+    return {
+      ...ackResult,
+      reasoning: "Acknowledgment detected - may need resolution analysis",
+    };
   }
 
   if (event.sender.isBot) {
@@ -143,6 +194,7 @@ export function classifyByRules(event: InternalEvent): ClassificationResult {
 
   const text = event.text;
 
+  // Tier 2: Keyword-based rules
   const matches: { label: ClassificationLabel; confidence: number; reasoning: string; matchCount: number }[] = [];
 
   for (const rule of RULES) {
@@ -168,22 +220,35 @@ export function classifyByRules(event: InternalEvent): ClassificationResult {
       };
     }
 
+    // ELEVATE TO AGENT: No rules matched, ambiguous case
     return {
       label: "unknown",
       confidence: 0.0,
       method: "rule",
-      reasoning: "No classification rules matched",
+      reasoning: "No classification rules matched - needs agent analysis",
     };
   }
 
   matches.sort((a, b) => b.matchCount - a.matchCount || b.confidence - a.confidence);
   const best = matches[0];
 
+  // If confidence is high enough, return the classification
+  // Otherwise, mark as needs agent review
+  if (best.confidence >= 0.7) {
+    return {
+      label: best.label,
+      confidence: best.confidence,
+      method: "rule",
+      reasoning: best.reasoning,
+    };
+  }
+
+  // ELEVATE TO AGENT: Low confidence match
   return {
-    label: best.label,
+    label: "unknown",
     confidence: best.confidence,
     method: "rule",
-    reasoning: best.reasoning,
+    reasoning: `Low confidence ${best.label} match (${best.confidence.toFixed(2)}) - needs agent analysis`,
   };
 }
 
@@ -238,31 +303,11 @@ Respond in JSON format:
 {"label":"bug|request|normal|unknown","confidence":0.0-1.0,"reasoning":"brief explanation"}`;
 
 /**
- * Full classification pipeline: rules first, model fallback if ambiguous.
+ * TIER 3: Model-based classification (legacy, kept for compatibility)
+ * Used when rules return unknown and no agent is available.
+ * @deprecated Use UnifiedAgent instead for ambiguous cases.
  */
-export async function classifyMessage(
-  env: Env,
-  event: InternalEvent
-): Promise<ClassificationResult> {
-  const ruleResult = classifyByRules(event);
-
-  if (ruleResult.label !== "unknown") {
-    logger.debug("Classified by rules", {
-      messageId: event.messageId,
-      label: ruleResult.label,
-      confidence: ruleResult.confidence,
-    });
-    return ruleResult;
-  }
-
-  logger.debug("Rules inconclusive, using model fallback", {
-    messageId: event.messageId,
-  });
-
-  return classifyByModel(env, event);
-}
-
-async function classifyByModel(
+export async function classifyByModel(
   env: Env,
   event: InternalEvent
 ): Promise<ClassificationResult> {
@@ -310,6 +355,57 @@ async function classifyByModel(
     method: "model",
     reasoning: "Model fallback failed or returned unparseable response",
   };
+}
+
+/**
+ * Full classification pipeline: Tier 1/2 rules only.
+ * Returns "unknown" for cases that should be elevated to the Unified Agent.
+ *
+ * This is the NEW pipeline - caller should check for "unknown" and invoke
+ * the Unified Agent for resolution detection and response generation.
+ */
+export async function classifyMessage(
+  env: Env,
+  event: InternalEvent
+): Promise<ClassificationResult> {
+  const ruleResult = classifyByRules(event);
+
+  if (ruleResult.label !== "unknown") {
+    logger.debug("Classified by Tier 1/2 rules", {
+      messageId: event.messageId,
+      label: ruleResult.label,
+      confidence: ruleResult.confidence,
+      tier: ruleResult.method === "rule" ? 1 : 2,
+    });
+    return ruleResult;
+  }
+
+  // Return "unknown" - caller should invoke Unified Agent (Tier 3)
+  logger.debug("Tier 1/2 inconclusive - elevate to Agent", {
+    messageId: event.messageId,
+    reasoning: ruleResult.reasoning,
+  });
+
+  return ruleResult;
+}
+
+/**
+ * Check if a message should be elevated to the Unified Agent.
+ * Returns true for "unknown" classifications or acknowledgments that need resolution detection.
+ */
+export function shouldElevateToAgent(result: ClassificationResult): boolean {
+  // Elevate unknown classifications
+  if (result.label === "unknown") {
+    return true;
+  }
+
+  // Elevate acknowledgments for resolution detection
+  if (result.reasoning.includes("acknowledgment") || result.reasoning.includes("resolution")) {
+    return true;
+  }
+
+  // Don't elevate high-confidence classifications
+  return false;
 }
 
 function parseModelResponse(text: string): ClassificationResult | null {

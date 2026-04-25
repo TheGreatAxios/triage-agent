@@ -27,7 +27,7 @@ export type AIProvider =
   | "huggingface"
   | "xai";
 
-export type AITask = "classify" | "draft" | "summarize";
+export type AITask = "classify" | "draft" | "summarize" | "agent";
 
 export interface ModelConfig {
   provider: AIProvider;
@@ -89,6 +89,14 @@ const TASK_MODELS: Record<AITask, [ModelConfig, ModelConfig, ModelConfig]> = {
     // Tier 2: OpenRouter fallback free model
     { provider: "openrouter", model: "google/gemma-3-27b-it:free" },
     // Tier 3: OpenAI gpt-5.4-nano with flex tier, reasoningEffort=none
+    { provider: "openai", model: "gpt-5.4-nano" },
+  ],
+  agent: [
+    // Tier 1: NVIDIA NIM - z-ai/glm-4.7 (free tier available)
+    { provider: "nvidia", model: "z-ai/glm-4.7" },
+    // Tier 2: OpenRouter free model for agent tasks
+    { provider: "openrouter", model: "google/gemma-3-27b-it:free" },
+    // Tier 3: OpenAI gpt-5.4-nano with flex tier, reasoningEffort=low for agent reasoning
     { provider: "openai", model: "gpt-5.4-nano" },
   ],
 };
@@ -325,6 +333,7 @@ export function getTaskModels(): Record<AITask, ModelConfig> {
     classify: TASK_MODELS.classify[0],
     draft: TASK_MODELS.draft[0],
     summarize: TASK_MODELS.summarize[0],
+    agent: TASK_MODELS.agent[0],
   };
 }
 
