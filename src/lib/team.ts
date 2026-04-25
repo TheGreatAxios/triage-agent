@@ -27,7 +27,16 @@ export interface TeamMember {
 }
 
 /**
+ * Normalize username for consistent storage/matching.
+ * Removes leading @ if present, trims whitespace, converts to lowercase.
+ */
+function normalizeUsername(username: string): string {
+  return username.replace(/^@/, "").trim().toLowerCase();
+}
+
+/**
  * Check if a username belongs to a team member.
+ * Handles both @username and username formats.
  */
 export async function isTeamMember(
   db: D1Database,
@@ -35,12 +44,14 @@ export async function isTeamMember(
 ): Promise<boolean> {
   if (!username) return false;
 
+  const normalized = normalizeUsername(username);
+
   const row = await db
     .prepare(
       `SELECT 1 FROM team_members
        WHERE telegram_username = ? AND is_active = 1`
     )
-    .bind(username)
+    .bind(normalized)
     .first<{ "1": number }>();
 
   return !!row;
@@ -48,18 +59,21 @@ export async function isTeamMember(
 
 /**
  * Get team member details by username.
+ * Handles both @username and username formats.
  */
 export async function getTeamMemberByUsername(
   db: D1Database,
   username: string
 ): Promise<TeamMember | null> {
+  const normalized = normalizeUsername(username);
+
   const row = await db
     .prepare(
       `SELECT id, telegram_username, display_name, role, slack_user_id, is_active
        FROM team_members
        WHERE telegram_username = ? AND is_active = 1`
     )
-    .bind(username)
+    .bind(normalized)
     .first<{
       id: number;
       telegram_username: string;

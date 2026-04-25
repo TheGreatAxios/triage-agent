@@ -19,10 +19,9 @@
     "mcp:add": "bun run scripts/add-mcp.ts",
     "mcp:list": "bun run scripts/list-mcp.ts",
     "mcp:remove": "bun run scripts/remove-mcp.ts",
-    "team:add": "bun run scripts/manage-team.ts add",
-    "team:list": "bun run scripts/manage-team.ts list",
-    "team:remove": "bun run scripts/manage-team.ts remove",
-    "team:update": "bun run scripts/manage-team.ts update"
+    "telegram:add": "bun run scripts/telegram-add.ts",
+    "telegram:remove": "bun run scripts/telegram-remove.ts",
+    "telegram:list": "bun run scripts/telegram-list.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^1.2.12",

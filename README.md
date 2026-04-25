@@ -409,6 +409,55 @@ const TASK_MODELS: Record<AITask, ModelConfig> = {
 
 Available providers: `workers-ai`, `nvidia`, `openai`, `openrouter`.
 
+## Runtime Management Commands
+
+**One Agent = One Team/Project.** Deploy one Worker per team. Add your team members so their responses skip AI processing.
+
+### Team Management
+
+Add Telegram users as team members so their responses skip AI processing:
+
+```bash
+# Add single member
+bun run telegram:add @username "Display Name" role slack-id
+bun run telegram:add @alice "Alice Chen" agent U123456
+
+# Add multiple members (comma-separated)
+bun run telegram:add @alice,@bob,@charlie --names "Alice,Bob,Charlie"
+bun run telegram:add @alice,@bob --names "Alice,Bob" --roles "agent,supervisor"
+bun run telegram:add @alice,@bob --names "Alice,Bob" --slack "U123,U456"
+
+# List all team members
+bun run telegram:list
+
+# Remove (deactivate) a member
+bun run telegram:remove @username
+bun run telegram:remove @alice
+```
+
+**Roles:** `agent` (default), `admin`, `supervisor` — all skip AI processing when responding.
+
+### MCP Tool Management
+
+Add external tools (search, docs) for AI context enrichment:
+
+```bash
+# Add MCP server
+bun run mcp:add <name> <url> <description> [tools...]
+bun run mcp:add web-search https://search.example.com "Web search" search query
+
+# List all MCP servers
+bun run mcp:list
+
+# Remove MCP server
+bun run mcp:remove <name>
+bun run mcp:remove web-search
+```
+
+Pre-configured MCPs (migration 0004):
+- **Parallel** (`PARALLEL_API_KEY`) - Web search for bugs/requests
+- **Context7** (`CONTEXT7_API_KEY`) - Documentation lookup
+
 ## Development
 
 ```bash
