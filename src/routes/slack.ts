@@ -101,8 +101,18 @@ slackRoutes.post("/interactions", async (c) => {
 
     // Handle special actions
     if (action.action_id === "open_batch_modal") {
+      logger.info("Opening batch modal", { triggerId: payload.trigger_id, user: payload.user });
       const pending = await getPendingApprovals(c.env.DB, "pending");
-      await openBatchApprovalModal(
+      logger.info("Found pending approvals", { count: pending.length });
+
+      if (pending.length === 0) {
+        return c.json({
+          response_type: "ephemeral",
+          text: "No pending approvals to batch process.",
+        });
+      }
+
+      const opened = await openBatchApprovalModal(
         c.env.SLACK_BOT_TOKEN,
         payload.trigger_id || "",
         pending.map((p) => ({
@@ -115,7 +125,11 @@ slackRoutes.post("/interactions", async (c) => {
           complexityScore: p.complexityScore,
         }))
       );
-      return c.json({ ok: true });
+
+      logger.info("Batch modal open result", { opened });
+
+      // Return empty 200 OK - modal opened via views.open API
+      return c.body(null, 200);
     }
 
     if (action.action_id === "refresh_pending") {
