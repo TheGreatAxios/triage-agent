@@ -5,11 +5,17 @@ import { getErrorMessage } from "./errors";
 
 const LINEAR_API_URL = "https://api.linear.app/graphql";
 
-function getLabelIds(env: Env): Record<string, string> {
-  const labels: Record<string, string> = {};
-  if (env.LINEAR_LABEL_BUG) labels.bug = env.LINEAR_LABEL_BUG;
-  if (env.LINEAR_LABEL_REQUEST) labels.request = env.LINEAR_LABEL_REQUEST;
-  return labels;
+/** UUID format validator */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function validateUUID(value: string | undefined, name: string): string | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (!UUID_RE.test(trimmed)) {
+    logger.error(`Invalid Linear UUID format`, { name, value: `${trimmed.slice(0, 8)}...` });
+    return null;
+  }
+  return trimmed;
 }
 
 interface LinearIssueResult {
@@ -19,6 +25,8 @@ interface LinearIssueResult {
 
 /**
  * Create a triage issue in Linear for bug or request classifications.
+ *
+ * Validates all UUIDs before sending — logs clear errors for any malformed IDs.
  */
 export async function createTriageIssue(
   env: Env,
@@ -26,14 +34,28 @@ export async function createTriageIssue(
   classification: { label: ClassificationLabel; confidence: number; reasoning: string },
   recentMessages: string[]
 ): Promise<LinearIssueResult | null> {
-  const labelIds = getLabelIds(env);
-  const labelId = labelIds[classification.label];
-  if (!labelId) {
-    logger.warn("No Linear label mapping for classification", {
-      label: classification.label,
+  // Validate required UUIDs
+  const teamId = validateUUID(env.LINEAR_TEAM_ID, "LINEAR_TEAM_ID");
+  const stateId = validateUUID(env.LINEAR_TRIAGE_STATE_ID, "LINEAR_TRIAGE_STATE_ID");
+
+  if (!teamId || !stateId) {
+    logger.error("Linear issue creation skipped — missing or invalid required IDs", {
+      teamId: !!teamId,
+      stateId: !!stateId,
     });
     return null;
   }
+
+  // Optional UUIDs
+  const projectId = validateUUID(env.LINEAR_PROJECT_ID, "LINEAR_PROJECT_ID");
+
+  // Resolve label ID for classification
+  const labelMap: Record<string, string | undefined> = {
+    bug: env.LINEAR_LABEL_BUG,
+    request: env.LINEAR_LABEL_REQUEST,
+  };
+  const rawLabelId = labelMap[classification.label];
+  const labelId = rawLabelId ? validateUUID(rawLabelId, `LABEL_${classification.label}`) : null;
 
   const chatLabel = chatTitle ?? "Unknown Chat";
   const prefix = classification.label === "bug" ? "🐛 Bug" : "✨ Feature Request";
@@ -68,16 +90,16 @@ export async function createTriageIssue(
     }
   `;
 
-  const variables = {
-    input: {
-      title,
-      description,
-      teamId: env.LINEAR_TEAM_ID,
-      ...(env.LINEAR_PROJECT_ID ? { projectId: env.LINEAR_PROJECT_ID } : {}),
-      stateId: env.LINEAR_TRIAGE_STATE_ID,
-      labelIds: [labelId],
-    },
+  const input: Record<string, unknown> = {
+    title,
+    description,
+    teamId,
+    stateId,
+    ...(projectId ? { projectId } : {}),
+    ...(labelId ? { labelIds: [labelId] } : {}),
   };
+
+  const variables = { input };
 
   try {
     const resp = await fetch(LINEAR_API_URL, {
@@ -102,12 +124,22 @@ export async function createTriageIssue(
           issue: { id: string; url: string };
         };
       };
-      errors?: { message: string }[];
+      errors?: { message: string; extensions?: Record<string, unknown> }[];
     }>();
 
     if (json.errors?.length) {
       logger.error("Linear GraphQL errors", {
-        errors: json.errors.map((e) => e.message).join("; "),
+        errors: json.errors.map((e) => ({
+          message: e.message,
+          ...e.extensions,
+        })),
+        input: {
+          teamId,
+          stateId,
+          projectId: projectId ?? null,
+          labelId: labelId ?? null,
+          classification: classification.label,
+        },
       });
       return null;
     }
