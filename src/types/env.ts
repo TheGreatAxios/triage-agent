@@ -4,7 +4,6 @@ export interface Env {
   AI: Ai;
   ARCHIVE: R2Bucket;
   KNOWLEDGE_CACHE: R2Bucket;
-  TRIAGE_QUEUE: Queue;
 
   // Telegram
   TELEGRAM_BOT_TOKEN: string;

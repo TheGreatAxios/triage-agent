@@ -1,9 +1,8 @@
 import type { TelegramUpdate } from "../types/telegram";
 import type { InternalEvent } from "../types/events";
-import type { TriageQueueMessage } from "../types/queue";
 import type { Env } from "../types/env";
 import { normalizeUpdate } from "../lib/normalizer";
-import { persistEvent, persistClassification, getChatByTelegramId } from "../lib/persistence";
+import { persistEvent, getChatByTelegramId } from "../lib/persistence";
 import { updateConversationState, cancelTimers } from "../lib/state";
 import { trackPipelineMetrics } from "../lib/metrics";
 import { logger } from "../lib/logger";
@@ -15,39 +14,40 @@ import {
   ensureFirstCustomerMessage,
   getTeamMemberByUsername,
 } from "../lib/team";
+import { processTriageMessage } from "./triage";
 
 /**
- * Phase 1 (webhook, fast): validate → normalize → persist → state update → enqueue.
- * Returns a TriageQueueMessage if the message needs LLM triage, null otherwise.
+ * Ingest a Telegram update: validate → normalize → persist → state update → triage.
+ * Runs entirely within a single waitUntil — Workers AI completes in 1-3s.
  */
 export async function ingestUpdate(
   env: Env,
   update: TelegramUpdate
-): Promise<TriageQueueMessage | null> {
+): Promise<void> {
   // Handle bot being added/removed from chats first
   if (update.my_chat_member || update.chat_member) {
     const wasAdded = await handleBotAddedToChat(env, update);
-    if (wasAdded) return null;
+    if (wasAdded) return;
 
     const wasRemoved = await handleBotRemovedFromChat(env, update);
-    if (wasRemoved) return null;
+    if (wasRemoved) return;
   }
 
   // Check if update is processable as a message
   if (!isProcessableUpdate(update)) {
     logger.debug("Skipping non-processable update", { update_id: update.update_id });
-    return null;
+    return;
   }
 
   // Normalize the update to internal event format
   const event = normalizeUpdate(update);
   if (!event) {
     logger.debug("Normalizer returned null", { update_id: update.update_id });
-    return null;
+    return;
   }
 
   const message = update.message ?? update.edited_message;
-  if (!message) return null;
+  if (!message) return;
 
   // IDEMPOTENCY: Check if this exact message was already processed
   const existingMessage = await env.DB.prepare(
@@ -58,7 +58,7 @@ export async function ingestUpdate(
 
   if (existingMessage) {
     logger.info("Message already processed — skipping", { messageId: event.messageId, chatId: event.chatId });
-    return null;
+    return;
   }
 
   // APPROVAL GATE: Check if chat is approved before processing messages
@@ -69,7 +69,7 @@ export async function ingestUpdate(
       chat_title: message.chat.title,
       approval_status: chatRecord?.approval_status || "unknown",
     });
-    return null;
+    return;
   }
 
   let dbChatId: number;
@@ -100,7 +100,7 @@ export async function ingestUpdate(
       await recordTeamTouch(env.DB, dbChatId, teamMember.id, event.timestamp);
       await cancelTimers(env.DB, dbChatId);
       logger.info("Team member response — skipping AI pipeline", { chatId: dbChatId, teamMember: teamMember.telegramUsername });
-      return null;
+      return;
     }
   } else {
     await ensureFirstCustomerMessage(env.DB, dbChatId, senderUsername, event.timestamp);
@@ -119,10 +119,10 @@ export async function ingestUpdate(
   }
 
   // Skip AI pipeline for bot messages
-  if (event.sender.isBot) return null;
+  if (event.sender.isBot) return;
 
-  // Enqueue for async triage instead of running inline
-  const queueMessage: TriageQueueMessage = {
+  // Run triage inline — Workers AI calls complete in 1-3s, well within waitUntil limits
+  await processTriageMessage(env, {
     dbChatId,
     dbMessageId,
     telegramChatId: event.chatId,
@@ -136,12 +136,7 @@ export async function ingestUpdate(
     updateId: update.update_id,
     messageId: event.messageId,
     timestamp: event.timestamp,
-  };
-
-  await env.TRIAGE_QUEUE.send(queueMessage);
-  logger.info("Message enqueued for triage", { dbChatId, dbMessageId, updateId: update.update_id });
-
-  return queueMessage;
+  });
 }
 
 function isProcessableUpdate(update: TelegramUpdate): boolean {

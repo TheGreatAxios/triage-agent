@@ -1,4 +1,3 @@
-import type { TriageQueueMessage } from "../types/queue";
 import type { InternalEvent } from "../types/events";
 import type { Env } from "../types/env";
 import { triageMessage } from "../lib/classifier";
@@ -11,14 +10,30 @@ import { createPostHogClient, shutdownPostHog } from "../lib/telemetry";
 import { getOrRefreshSummary } from "../lib/summary";
 import { getRecentMessagesWithSenders, buildMessageContext } from "../lib/queries";
 
+/** Internal message passed from ingest to triage. */
+interface TriageMessage {
+  dbChatId: number;
+  dbMessageId: number;
+  telegramChatId: number;
+  text: string;
+  sender: {
+    id: number;
+    username: string | null;
+    name: string;
+    isBot: boolean;
+  };
+  updateId: number;
+  messageId: number;
+  timestamp: string;
+}
+
 /**
- * Phase 2 (queue consumer): LLM triage + handle result.
- * Runs in a Queue consumer with up to 30 minutes per message,
- * eliminating waitUntil timeout issues.
+ * Run LLM triage on a message and handle the result.
+ * Workers AI calls complete in 1-3s — runs inline within waitUntil.
  */
 export async function processTriageMessage(
   env: Env,
-  msg: TriageQueueMessage,
+  msg: TriageMessage,
 ): Promise<void> {
   const triageStart = Date.now();
   const posthog = createPostHogClient(env);
@@ -61,12 +76,12 @@ export async function processTriageMessage(
     await handleTriageResult(env, msg.dbChatId, triage, msg.dbMessageId);
   } catch (err) {
     trackPipelineMetrics({ chatId: msg.telegramChatId, stage: "triage", durationMs: Date.now() - triageStart, success: false });
-    logger.error("Triage pipeline failed (queue)", {
+    logger.error("Triage pipeline failed", {
       update_id: msg.updateId,
       dbChatId: msg.dbChatId,
       error: getErrorMessage(err),
     });
-    throw err; // Re-throw so queue retries
+    throw err;
   } finally {
     await shutdownPostHog(posthog);
   }
