@@ -31,12 +31,12 @@
 		"producers": [
 			{
 				"binding": "TRIAGE_QUEUE",
-				"queue": "triage-pipeline"
+				"queue": "triage-queue"
 			}
 		],
 		"consumers": [
 			{
-				"queue": "triage-pipeline",
+				"queue": "triage-queue",
 				"max_batch_size": 1,
 				"max_batch_timeout": 5,
 				"max_retries": 3,
