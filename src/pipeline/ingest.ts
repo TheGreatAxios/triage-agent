@@ -1,33 +1,29 @@
 import type { TelegramUpdate } from "../types/telegram";
 import type { InternalEvent } from "../types/events";
+import type { TriageQueueMessage } from "../types/queue";
 import type { Env } from "../types/env";
 import { normalizeUpdate } from "../lib/normalizer";
 import { persistEvent, persistClassification, getChatByTelegramId } from "../lib/persistence";
-import { triageMessage } from "../lib/classifier";
 import { updateConversationState, cancelTimers } from "../lib/state";
-import { handleTriageResult } from "./respond";
 import { trackPipelineMetrics } from "../lib/metrics";
 import { logger } from "../lib/logger";
 import { handleBotAddedToChat, handleBotRemovedFromChat } from "../lib/approval";
 import { getErrorMessage } from "../lib/errors";
-import { createPostHogClient, shutdownPostHog } from "../lib/telemetry";
 import {
   isTeamMember,
   recordTeamTouch,
   ensureFirstCustomerMessage,
   getTeamMemberByUsername,
 } from "../lib/team";
-import { getOrRefreshSummary } from "../lib/summary";
-import { getRecentMessagesWithSenders, buildMessageContext } from "../lib/queries";
 
 /**
- * Full ingestion pipeline: validate → normalize → persist → triage → act.
- * Single LLM call for classify + draft + action decision.
+ * Phase 1 (webhook, fast): validate → normalize → persist → state update → enqueue.
+ * Returns a TriageQueueMessage if the message needs LLM triage, null otherwise.
  */
 export async function ingestUpdate(
   env: Env,
   update: TelegramUpdate
-): Promise<InternalEvent | null> {
+): Promise<TriageQueueMessage | null> {
   // Handle bot being added/removed from chats first
   if (update.my_chat_member || update.chat_member) {
     const wasAdded = await handleBotAddedToChat(env, update);
@@ -62,7 +58,7 @@ export async function ingestUpdate(
 
   if (existingMessage) {
     logger.info("Message already processed — skipping", { messageId: event.messageId, chatId: event.chatId });
-    return event;
+    return null;
   }
 
   // APPROVAL GATE: Check if chat is approved before processing messages
@@ -104,7 +100,7 @@ export async function ingestUpdate(
       await recordTeamTouch(env.DB, dbChatId, teamMember.id, event.timestamp);
       await cancelTimers(env.DB, dbChatId);
       logger.info("Team member response — skipping AI pipeline", { chatId: dbChatId, teamMember: teamMember.telegramUsername });
-      return event;
+      return null;
     }
   } else {
     await ensureFirstCustomerMessage(env.DB, dbChatId, senderUsername, event.timestamp);
@@ -123,68 +119,29 @@ export async function ingestUpdate(
   }
 
   // Skip AI pipeline for bot messages
-  if (event.sender.isBot) return event;
+  if (event.sender.isBot) return null;
 
-  // ============================================================================
-  // TRIAGE: Single LLM call — classify + draft + action
-  // ============================================================================
+  // Enqueue for async triage instead of running inline
+  const queueMessage: TriageQueueMessage = {
+    dbChatId,
+    dbMessageId,
+    telegramChatId: event.chatId,
+    text: event.text,
+    sender: {
+      id: event.sender.id,
+      username: event.sender.username ?? null,
+      name: event.sender.name,
+      isBot: event.sender.isBot,
+    },
+    updateId: update.update_id,
+    messageId: event.messageId,
+    timestamp: event.timestamp,
+  };
 
-  const triageStart = Date.now();
-  const posthog = createPostHogClient(env);
+  await env.TRIAGE_QUEUE.send(queueMessage);
+  logger.info("Message enqueued for triage", { dbChatId, dbMessageId, updateId: update.update_id });
 
-  try {
-    // Build conversation context for the LLM
-    const context = await buildContext(env.DB, dbChatId);
-
-    const triage = await triageMessage(env, event, context, posthog);
-
-    // Persist classification for analytics / timer lookups
-    await persistClassification(env.DB, dbMessageId, dbChatId, {
-      label: triage.label,
-      confidence: triage.confidence,
-      method: triage.method,
-      reasoning: triage.reasoning,
-    });
-
-    trackPipelineMetrics({ chatId: event.chatId, stage: "triage", durationMs: Date.now() - triageStart, success: true });
-
-    // Act on the result
-    await handleTriageResult(env, dbChatId, triage, dbMessageId);
-  } catch (err) {
-    trackPipelineMetrics({ chatId: event.chatId, stage: "triage", durationMs: Date.now() - triageStart, success: false });
-    logger.error("Triage pipeline failed", {
-      update_id: event.id,
-      error: getErrorMessage(err),
-    });
-  } finally {
-    // Flush PostHog telemetry — must happen before waitUntil expires
-    await shutdownPostHog(posthog);
-  }
-
-  return event;
-}
-
-/**
- * Build conversation context string for the triage LLM.
- */
-async function buildContext(db: D1Database, chatId: number): Promise<string> {
-  const summary = await getOrRefreshSummary(db, chatId);
-
-  const messages = await getRecentMessagesWithSenders(db, {
-    chatId,
-    limit: 10,
-    order: "desc",
-  });
-
-  const recentMessages = buildMessageContext(messages.reverse());
-
-  let context = "";
-  if (summary) {
-    context += `Summary:\n${summary.content}\n\n`;
-  }
-  context += `Recent messages:\n${recentMessages}`;
-
-  return context;
+  return queueMessage;
 }
 
 function isProcessableUpdate(update: TelegramUpdate): boolean {

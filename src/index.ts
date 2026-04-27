@@ -7,8 +7,10 @@ import { processTimers, checkApprovalExpirations, sendDailySummaryIfScheduled } 
 import { archiveOldMessages } from "./lib/archiver";
 import { reconcileCounters, cleanupOldReconciliationLogs } from "./lib/counters/reconciliation";
 import { runDailyRollup } from "./lib/counters/rollup";
+import { processTriageMessage } from "./pipeline/triage";
 import { logger } from "./lib/logger";
 import { getErrorMessage } from "./lib/errors";
+import type { TriageQueueMessage } from "./types/queue";
 
 const app = new Hono<AppEnv>();
 
@@ -79,6 +81,22 @@ app.notFound((c) => {
 
 export default {
   fetch: app.fetch,
+  async queue(batch: MessageBatch<TriageQueueMessage>, env: Env, ctx: ExecutionContext) {
+    for (const message of batch.messages) {
+      ctx.waitUntil(
+        processTriageMessage(env, message.body).then(() => {
+          message.ack();
+        }).catch((err) => {
+          logger.error("Queue triage failed — will retry", {
+            messageId: message.id,
+            dbChatId: message.body.dbChatId,
+            error: getErrorMessage(err),
+          });
+          message.retry({ delaySeconds: 5 });
+        })
+      );
+    }
+  },
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
     ctx.waitUntil(
       processTimers(env).then((count) => {

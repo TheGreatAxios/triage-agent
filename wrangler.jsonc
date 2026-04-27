@@ -27,6 +27,23 @@
 			"bucket_name": "triage-knowledge-cache"
 		}
 	],
+	"queues": {
+		"producers": [
+			{
+				"binding": "TRIAGE_QUEUE",
+				"queue": "triage-pipeline"
+			}
+		],
+		"consumers": [
+			{
+				"queue": "triage-pipeline",
+				"max_batch_size": 1,
+				"max_batch_timeout": 5,
+				"max_retries": 3,
+				"retry_delay": 5
+			}
+		]
+	},
 	"triggers": {
 		"crons": [
 			"*/5 * * * *",    // Process timers every 5 minutes (responsive auto-drafts)

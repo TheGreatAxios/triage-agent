@@ -80,6 +80,9 @@ export async function triageMessage(
           reasoningEffort: "none",
           serviceTier: "flex",
         },
+        "nvidia-nim": {
+          reasoning_effort: "low",
+        },
       },
     });
 
