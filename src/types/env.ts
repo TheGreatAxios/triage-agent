@@ -41,7 +41,6 @@ export interface Env {
   FIREWORKS_API_KEY?: string;       // Fireworks AI
   HUGGINGFACE_API_KEY?: string;     // HF Inference API
   MINIMAX_API_KEY?: string;         // MiniMax models
-  NVIDIA_API_KEY?: string;          // NVIDIA NIM
   OPENROUTER_API_KEY?: string;      // OpenRouter (multi-model access)
   ZAI_API_KEY?: string;             // Zhipu AI (ZAI)
 

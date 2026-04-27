@@ -20,7 +20,6 @@ export type AIProvider =
   | "google"
   | "groq"
   | "openrouter"
-  | "nvidia"
   | "custom"
   | "deepinfra"
   | "minimax"
@@ -48,49 +47,51 @@ export interface ModelConfig {
  *
  * Examples:
  * - classify: { provider: "workers-ai", model: "@cf/meta/llama-3.1-8b-instruct" }
- * - draft: { provider: "nvidia", model: "meta/llama-3.3-70b-instruct" }
- * - summarize: { provider: "openai", model: "gpt-4o-mini" }
+ * - draft: { provider: "workers-ai", model: "@cf/meta/llama-3.1-8b-instruct-fp8-fast" }
+ * - summarize: { provider: "openrouter", model: "google/gemma-4-26b-a4b-it:free" }
  *
  * Self-hosted example:
  * - classify: { provider: "custom", model: "llama3.1:8b", baseURL: "http://localhost:11434/v1" }
  */
 /**
- * Multi-tier fallback strategy optimized for free tier:
+ * Multi-tier fallback strategy — Cloudflare Workers AI primary:
  *
- * TIER 1 (Primary):
- * - classify: IBM Granite 4.0 (cheapest CF model: 1,542 neurons/M input)
- * - draft:    NVIDIA step-3.5-flash (40 req/min limit)
- * - summarize: OpenRouter gemma-4-26b-a4b-it:free
+ * TIER 1 (Primary — Cloudflare Workers AI):
+ * - triage:   Llama 3.1 8B FP8 Fast ($0.045/$0.384 per M tokens)
+ * - classify: IBM Granite 4.0 Micro ($0.017/$0.112 per M tokens)
+ * - draft:    Llama 3.1 8B FP8 Fast
+ * - summarize: OpenRouter free model
+ * - agent:    Llama 3.1 8B FP8 Fast
  *
- * TIER 2 (Fallback - if primary fails/quota exceeded):
- * - All tasks: OpenRouter free models (google/gemma-3-27b-it:free)
+ * TIER 2 (Fallback — OpenRouter free):
+ * - All tasks: google/gemma-3-27b-it:free
  *
- * TIER 3 (Emergency - if all else fails):
- * - All tasks: OpenAI gpt-5.4-nano (flex tier, reasoning=none)
+ * TIER 3 (Emergency — OpenAI):
+ * - All tasks: gpt-5.4-nano (flex tier, reasoning=none)
  */
 const TASK_MODELS: Record<AITask, [ModelConfig, ModelConfig, ModelConfig]> = {
   triage: [
-    // Tier 1: NVIDIA step-3.5-flash — strong enough for classify + draft in one call
-    { provider: "nvidia", model: "deepseek-ai/deepseek-v4-flash" },
+    // Tier 1: Llama 3.1 8B FP8 Fast — best value on Workers AI ($0.045/$0.384 per M)
+    { provider: "workers-ai", model: "@cf/meta/llama-3.1-8b-instruct-fp8-fast" },
     // Tier 2: OpenRouter free model
     { provider: "openrouter", model: "google/gemma-3-27b-it:free" },
-    // Tier 3: OpenAI gpt-5.4-nano with flex tier, reasoningEffort=none
+    // Tier 3: OpenAI gpt-5.4-nano (flex tier, reasoningEffort=none)
     { provider: "openai", model: "gpt-5.4-nano" },
   ],
   classify: [
-    // Tier 1: IBM Granite 4.0 - cheapest CF Workers model (1,542 neurons/M input)
+    // Tier 1: IBM Granite 4.0 Micro — cheapest CF Workers model ($0.017/$0.112 per M)
     { provider: "workers-ai", model: "@cf/ibm-granite/granite-4.0-h-micro" },
     // Tier 2: OpenRouter free model
     { provider: "openrouter", model: "google/gemma-3-27b-it:free" },
-    // Tier 3: OpenAI gpt-5.4-nano with flex tier, reasoningEffort=none
+    // Tier 3: OpenAI gpt-5.4-nano (flex tier, reasoningEffort=none)
     { provider: "openai", model: "gpt-5.4-nano" },
   ],
   draft: [
-    // Tier 1: NVIDIA step-3.5-flash (40 req/min limit)
-    { provider: "nvidia", model: "stepfun-ai/step-3.5-flash" },
+    // Tier 1: Llama 3.1 8B FP8 Fast — best value on Workers AI
+    { provider: "workers-ai", model: "@cf/meta/llama-3.1-8b-instruct-fp8-fast" },
     // Tier 2: OpenRouter free model
     { provider: "openrouter", model: "google/gemma-3-27b-it:free" },
-    // Tier 3: OpenAI gpt-5.4-nano with flex tier, reasoningEffort=none
+    // Tier 3: OpenAI gpt-5.4-nano (flex tier, reasoningEffort=none)
     { provider: "openai", model: "gpt-5.4-nano" },
   ],
   summarize: [
@@ -98,15 +99,15 @@ const TASK_MODELS: Record<AITask, [ModelConfig, ModelConfig, ModelConfig]> = {
     { provider: "openrouter", model: "google/gemma-4-26b-a4b-it:free" },
     // Tier 2: OpenRouter fallback free model
     { provider: "openrouter", model: "google/gemma-3-27b-it:free" },
-    // Tier 3: OpenAI gpt-5.4-nano with flex tier, reasoningEffort=none
+    // Tier 3: OpenAI gpt-5.4-nano (flex tier, reasoningEffort=none)
     { provider: "openai", model: "gpt-5.4-nano" },
   ],
   agent: [
-    // Tier 1: NVIDIA NIM - z-ai/glm-4.7 (free tier available)
-    { provider: "nvidia", model: "z-ai/glm-4.7" },
-    // Tier 2: OpenRouter free model for agent tasks
+    // Tier 1: Llama 3.1 8B FP8 Fast — fast, cheap, good instruction following
+    { provider: "workers-ai", model: "@cf/meta/llama-3.1-8b-instruct-fp8-fast" },
+    // Tier 2: OpenRouter free model
     { provider: "openrouter", model: "google/gemma-3-27b-it:free" },
-    // Tier 3: OpenAI gpt-5.4-nano with flex tier, reasoningEffort=low for agent reasoning
+    // Tier 3: OpenAI gpt-5.4-nano (flex tier, reasoningEffort=low)
     { provider: "openai", model: "gpt-5.4-nano" },
   ],
 };
@@ -176,7 +177,6 @@ function getProviderApiKeyName(provider: AIProvider): string {
     "groq": "GROQ_API_KEY",
     "xai": "XAI_API_KEY",
     "openrouter": "OPENROUTER_API_KEY",
-    "nvidia": "NVIDIA_API_KEY",
     "deepinfra": "DEEPINFRA_API_KEY",
     "minimax": "MINIMAX_API_KEY",
     "zai": "ZAI_API_KEY",
@@ -256,17 +256,6 @@ export function resolveModel(env: Env, config: ModelConfig): LanguageModel {
         apiKey: getApiKey("OPENROUTER_API_KEY"),
       });
       return openrouter(model) as unknown as LanguageModel;
-    }
-
-    case "nvidia": {
-      const nim = createOpenAICompatible({
-        name: "nvidia-nim",
-        baseURL: baseURL ?? "https://integrate.api.nvidia.com/v1",
-        headers: {
-          Authorization: `Bearer ${getApiKey("NVIDIA_API_KEY")}`,
-        },
-      });
-      return nim.chatModel(model);
     }
 
     case "deepinfra": {
