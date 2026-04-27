@@ -10,6 +10,8 @@ import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { logger } from "./logger";
 import { getErrorMessage } from "./errors";
+import { withTelemetry } from "./telemetry";
+import type { TelemetryOptions } from "./telemetry";
 
 export type AIProvider =
   | "workers-ai"
@@ -140,6 +142,19 @@ export function getModel(env: Env, task: AITask): LanguageModel {
   }
 
   throw new Error(`No available model for task: ${task}`);
+}
+
+/**
+ * Get a language model for a task, wrapped with PostHog telemetry.
+ * Falls back to untraced model if telemetry is not configured.
+ */
+export function getTracedModel(
+  env: Env,
+  task: AITask,
+  telemetryOptions?: TelemetryOptions
+): LanguageModel {
+  const model = getModel(env, task);
+  return withTelemetry(model, env, telemetryOptions);
 }
 
 function getProviderApiKeyName(provider: AIProvider): string {

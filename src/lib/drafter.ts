@@ -2,7 +2,7 @@ import { generateText } from "ai";
 import type { Env } from "../types/env";
 import type { ClassificationResult } from "../types/classification";
 import type { DraftStatus } from "../types/draft";
-import { getModel } from "./ai";
+import { getTracedModel } from "./ai";
 import { getOrRefreshSummary } from "./summary";
 import { evaluateResponsePolicy } from "./config";
 import { logger } from "./logger";
@@ -65,7 +65,7 @@ export async function generateDraft(
   const context = await buildContext(env.DB, chatId);
   const fullContext = toolContext ? `${context}\n\nExternal resources:\n${toolContext}` : context;
 
-  const structured = await generateStructuredDraft(env, fullContext);
+  const structured = await generateStructuredDraft(env, fullContext, chatId, classification);
 
   // Validate and sanitize links before persisting
   const linkChecks = await validateLinks(structured.response);
@@ -151,9 +151,21 @@ async function buildContext(db: D1Database, chatId: number): Promise<string> {
   return context;
 }
 
-async function generateStructuredDraft(env: Env, context: string): Promise<StructuredDraft> {
+async function generateStructuredDraft(
+  env: Env,
+  context: string,
+  chatId: number,
+  classification: ClassificationResult
+): Promise<StructuredDraft> {
   try {
-    const model = getModel(env, "draft");
+    const model = getTracedModel(env, "draft", {
+      distinctId: `chat:${chatId}`,
+      properties: {
+        task: "draft",
+        classification: classification.label,
+        classificationConfidence: classification.confidence,
+      },
+    });
     // Sanitize conversation context to prevent prompt injection
     const sanitizedContext = sanitizeContextInput(context);
     const { text } = await generateText({

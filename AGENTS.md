@@ -9,6 +9,7 @@ Cloudflare Worker that ingests Telegram webhook events, classifies messages, gen
 - **Database:** Cloudflare D1 (SQLite) — hot operational state
 - **Storage:** Cloudflare R2 — archived conversation transcripts as JSONL
 - **AI:** Vercel AI SDK v6 via `src/lib/ai.ts` — multi-provider routing (Workers AI, NVIDIA NIM, OpenAI)
+- **Observability:** PostHog LLM analytics via `src/lib/telemetry.ts` — token usage, latency, cost per AI call
 - **Language:** TypeScript, strict mode
 
 ## Architecture
@@ -71,6 +72,10 @@ Linear Integration:
 Optional AI providers:
 - `NVIDIA_API_KEY`, `OPENAI_API_KEY`
 
+Observability (optional):
+- `POSTHOG_API_KEY` — PostHog project API key; enables LLM analytics (token usage, latency, cost)
+- `POSTHOG_HOST` — PostHog host (default: `https://us.i.posthog.com`; use `https://eu.i.posthog.com` for EU)
+
 Bindings (`wrangler.jsonc`):
 - `DB` — D1Database, `AI` — Workers AI, `ARCHIVE` — R2Bucket
 
@@ -85,6 +90,7 @@ Bindings (`wrangler.jsonc`):
 - **Async work:** Use `ctx.waitUntil()` for non-blocking pipeline processing.
 - **Webhook:** Always return 200 to Telegram immediately. Process async.
 - **AI calls:** Always go through `src/lib/ai.ts` — never call `env.AI.run()` directly.
+- **AI tracing:** Use `getTracedModel()` (not `getModel()`) for any `generateText`/`streamText` call. This wraps the model with PostHog telemetry automatically. Telemetry is a no-op if `POSTHOG_API_KEY` is unset.
 - **File editing:** Never use sed/awk. Use the Edit tool. Read files before editing.
 - **Database schema changes:** See `migrations/AGENTS.md` for mandatory validation steps.
 
@@ -101,6 +107,23 @@ If you develop a reusable pattern, create a skill in `~/.agents/skills/<skill-na
 - Include code examples, not just theory
 - No project-specific details (keep it generic)
 
+## Package Manager
+
+**Always use `bun` — never `npm` or `npx`.** Bun is the project's package manager and runtime.
+
+```bash
+bun add <package>        # Install dependency (use @latest, never pin versions)
+bun add -d <package>     # Install dev dependency
+bun run <script>         # Run a script (from package.json)
+bun <file.ts>            # Execute a TypeScript file directly
+bunx tsc --noEmit        # Type check (bunx replaces npx)
+```
+
+### Rules
+- **Never** use `npm install`, `npm ci`, `npm run`, or `npx`.
+- **Never** pin package versions (no `@1.2.3`). Always use `@latest`.
+- **Never** use `--legacy-peer-deps` or `--force`. If there's a peer dep conflict, fix the root cause.
+
 ## Commands
 
 ```bash
@@ -108,5 +131,5 @@ bun run dev              # Local development
 bun run deploy           # Deploy to Cloudflare
 bun run db:migrate:local # Apply D1 migrations locally
 bun run db:migrate:remote # Apply D1 migrations to production
-npx tsc --noEmit         # Type check
+bunx tsc --noEmit        # Type check
 ```

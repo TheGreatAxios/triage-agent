@@ -9,7 +9,7 @@ import type {
   AgentDecisionRecord,
 } from "../../types/agent";
 import type { ClassificationResult } from "../../types/classification";
-import { getModel } from "../ai";
+import { getTracedModel } from "../ai";
 import { logger } from "../logger";
 import { getConfig } from "../config";
 import { getErrorMessage } from "../errors";
@@ -188,7 +188,15 @@ export class UnifiedAgent {
     const prompt = this.buildPrompt(input, context);
 
     // Execute model
-    const model = getModel(this.env, "agent");
+    const model = getTracedModel(this.env, "agent", {
+      distinctId: `chat:${input.chatId}`,
+      properties: {
+        task: "agent",
+        disableReasoning,
+        messageId: input.messageId,
+        chatId: input.chatId,
+      },
+    });
     const systemPrompt = disableReasoning
       ? AGENT_SYSTEM_PROMPT_NO_REASONING
       : AGENT_SYSTEM_PROMPT;

@@ -5,6 +5,7 @@
 | File | Purpose |
 |------|---------|
 | `ai.ts` | AI provider routing — `TASK_MODELS` maps tasks to providers/models |
+| `telemetry.ts` | PostHog LLM analytics — wraps LanguageModel with tracing |
 | `archiver.ts` | Archive overflow messages to R2, prune from D1 |
 | `classifier.ts` | Rule-first classification + AI SDK model fallback |
 | `config.ts` | App config + `evaluateResponsePolicy()` |
@@ -84,7 +85,34 @@ npx wrangler secret put NVIDIA_API_KEY    # or OPENAI_API_KEY
 
 ### Monitoring
 
-Model selection is logged automatically. Check via `wrangler tail`.
+Model selection is logged automatically. Check via `bunx wrangler tail`.
+
+### LLM Analytics (PostHog)
+
+All AI calls are traced via PostHog LLM analytics (`src/lib/telemetry.ts`).
+
+**How it works:** `getTracedModel(env, task, options)` wraps the resolved `LanguageModel` with `@posthog/ai`'s `withTracing()`, which auto-captures:
+- Token usage (input/output)
+- Latency per call
+- Cost estimate
+- Model identity + provider
+- Inputs and outputs
+
+**Call sites:**
+| Location | Task | distinctId | Properties |
+|----------|------|------------|------------|
+| `classifier.ts` → `classifyByModel()` | `classify` | `chat:<chatId>` | `task`, `messageId`, `method` |
+| `drafter.ts` → `generateStructuredDraft()` | `draft` | `chat:<chatId>` | `task`, `classification`, `classificationConfidence` |
+| `agent/unifiedAgent.ts` → `runAgent()` | `agent` | `chat:<chatId>` | `task`, `disableReasoning`, `messageId`, `chatId` |
+
+**Setup:**
+1. Create a PostHog project at posthog.com
+2. `wrangler secret put POSTHOG_API_KEY`
+3. Optionally set `POSTHOG_HOST` for EU region
+
+**No-op behavior:** Without `POSTHOG_API_KEY`, `getTracedModel` returns the unwrapped model — zero overhead.
+
+**Adding telemetry to new AI calls:** Use `getTracedModel()` instead of `getModel()`. Pass `TelemetryOptions` with a `distinctId` and relevant `properties`.
 
 ## Config (`config.ts`)
 

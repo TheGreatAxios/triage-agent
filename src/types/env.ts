@@ -48,6 +48,10 @@ export interface Env {
   // Use apiKeyEnv in ModelConfig to reference custom env vars
   // Example: OLLAMA_API_KEY, LOCALAI_API_KEY, etc.
 
+  // Observability
+  POSTHOG_API_KEY?: string;    // PostHog project API key — enables LLM analytics
+  POSTHOG_HOST?: string;       // PostHog host (default: https://us.i.posthog.com)
+
   // MCP Tools (all optional)
   PARALLEL_API_KEY?: string;      // Optional - free tier available
   CONTEXT7_API_KEY?: string;      // Optional - free tier available

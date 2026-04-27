@@ -67,13 +67,36 @@ interface Env {
   DB: D1Database;
   AI: any;                    // Workers AI binding
   ARCHIVE: R2Bucket;
+  KNOWLEDGE_CACHE: R2Bucket;
   TELEGRAM_BOT_TOKEN: string;
   TELEGRAM_WEBHOOK_SECRET: string;
   SLACK_WEBHOOK_URL: string;
-  // Optional
-  LINEAR_API_KEY?: string;
+  // Slack Approval Flow
+  SLACK_BOT_TOKEN: string;
+  SLACK_SIGNING_SECRET: string;
+  SLACK_APPROVAL_CHANNEL_ID: string;
+  SLACK_SUMMARY_CHANNEL_ID: string;
+  // Linear
+  LINEAR_API_KEY: string;
+  LINEAR_TEAM_ID: string;
+  LINEAR_PROJECT_ID?: string;
+  LINEAR_TRIAGE_STATE_ID: string;
+  LINEAR_LABEL_BUG?: string;
+  LINEAR_LABEL_REQUEST?: string;
+  // Optional AI providers
   NVIDIA_API_KEY?: string;
   OPENAI_API_KEY?: string;
+  ANTHROPIC_API_KEY?: string;
+  GOOGLE_API_KEY?: string;
+  GROQ_API_KEY?: string;
+  XAI_API_KEY?: string;
+  OPENROUTER_API_KEY?: string;
+  // Observability
+  POSTHOG_API_KEY?: string;
+  POSTHOG_HOST?: string;
+  // MCP Tools
+  PARALLEL_API_KEY?: string;
+  CONTEXT7_API_KEY?: string;
 }
 ```
 

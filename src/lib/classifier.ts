@@ -2,7 +2,7 @@ import { generateText } from "ai";
 import type { InternalEvent } from "../types/events";
 import type { ClassificationResult, ClassificationLabel } from "../types/classification";
 import type { Env } from "../types/env";
-import { getModel } from "./ai";
+import { getTracedModel } from "./ai";
 import { logger } from "./logger";
 import { getErrorMessage } from "./errors";
 import { sanitizePromptInput } from "./sanitize";
@@ -312,7 +312,14 @@ export async function classifyByModel(
   event: InternalEvent
 ): Promise<ClassificationResult> {
   try {
-    const model = getModel(env, "classify");
+    const model = getTracedModel(env, "classify", {
+      distinctId: `chat:${event.chatId}`,
+      properties: {
+        task: "classify",
+        messageId: event.messageId,
+        method: "model",
+      },
+    });
     // Sanitize user input to prevent prompt injection
     const sanitizedText = sanitizePromptInput(event.text);
     const { text } = await generateText({
