@@ -48,20 +48,6 @@ export interface TeamMemberDailyStats {
 
 /**
  * Verify Slack request signature using signing secret.
- * @deprecated Use verifySlackRequestAsync instead for proper async handling
- */
-export function verifySlackRequest(
-  signingSecret: string,
-  timestamp: string,
-  body: string,
-  signature: string
-): Promise<boolean> {
-  // Delegate to async implementation for consistency
-  return verifySlackRequestAsync(signingSecret, timestamp, body, signature);
-}
-
-/**
- * Async wrapper for verification.
  * Includes 5-minute timestamp freshness check to prevent replay attacks.
  */
 export async function verifySlackRequestAsync(

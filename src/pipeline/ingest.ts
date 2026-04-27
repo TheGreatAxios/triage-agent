@@ -4,12 +4,13 @@ import type { Env } from "../types/env";
 import { normalizeUpdate } from "../lib/normalizer";
 import { persistEvent, persistClassification, getChatByTelegramId } from "../lib/persistence";
 import { triageMessage } from "../lib/classifier";
-import { updateConversationState, scheduleNoResponseTimer, cancelTimers } from "../lib/state";
+import { updateConversationState, cancelTimers } from "../lib/state";
 import { handleTriageResult } from "./respond";
 import { trackPipelineMetrics } from "../lib/metrics";
 import { logger } from "../lib/logger";
 import { handleBotAddedToChat, handleBotRemovedFromChat } from "../lib/approval";
 import { getErrorMessage } from "../lib/errors";
+import { createPostHogClient, shutdownPostHog } from "../lib/telemetry";
 import {
   isTeamMember,
   recordTeamTouch,
@@ -129,11 +130,13 @@ export async function ingestUpdate(
   // ============================================================================
 
   const triageStart = Date.now();
+  const posthog = createPostHogClient(env);
+
   try {
     // Build conversation context for the LLM
     const context = await buildContext(env.DB, dbChatId);
 
-    const triage = await triageMessage(env, event, context);
+    const triage = await triageMessage(env, event, context, posthog);
 
     // Persist classification for analytics / timer lookups
     await persistClassification(env.DB, dbMessageId, dbChatId, {
@@ -153,6 +156,9 @@ export async function ingestUpdate(
       update_id: event.id,
       error: getErrorMessage(err),
     });
+  } finally {
+    // Flush PostHog telemetry — must happen before waitUntil expires
+    await shutdownPostHog(posthog);
   }
 
   return event;

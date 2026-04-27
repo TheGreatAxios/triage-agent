@@ -1,8 +1,9 @@
 import { generateText } from "ai";
 import type { InternalEvent } from "../types/events";
-import type { ClassificationResult, ClassificationLabel, TriageResult } from "../types/classification";
+import type { ClassificationLabel, TriageResult } from "../types/classification";
 import type { Env } from "../types/env";
 import { getTracedModel } from "./ai";
+import type { PostHogClient } from "./telemetry";
 import { logger } from "./logger";
 import { getErrorMessage } from "./errors";
 import { sanitizePromptInput, sanitizeContextInput } from "./sanitize";
@@ -54,6 +55,7 @@ export async function triageMessage(
   env: Env,
   event: InternalEvent,
   context: string,
+  posthogClient?: PostHogClient,
 ): Promise<TriageResult> {
   try {
     const model = getTracedModel(env, "triage", {
@@ -62,6 +64,7 @@ export async function triageMessage(
         task: "triage",
         messageId: event.messageId,
       },
+      posthogClient: posthogClient ?? null,
     });
 
     const sanitizedContext = sanitizeContextInput(context);
@@ -111,26 +114,6 @@ export async function triageMessage(
     draft: null,
     draftConfidence: null,
     reasoning: "Triage LLM call failed or returned unparseable response",
-  };
-}
-
-/**
- * @deprecated Use triageMessage() instead. Kept for timer compatibility.
- *
- * Classify a message using the triage LLM (no draft, no action).
- * Returns a ClassificationResult for consumers that only need the label.
- */
-export async function classifyMessage(
-  env: Env,
-  event: InternalEvent,
-): Promise<ClassificationResult> {
-  const context = ""; // No context for legacy callers
-  const result = await triageMessage(env, event, context);
-  return {
-    label: result.label,
-    confidence: result.confidence,
-    method: result.method,
-    reasoning: result.reasoning,
   };
 }
 

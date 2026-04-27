@@ -1,4 +1,3 @@
-import type { ClassificationResult } from "../types/classification";
 import type { TriageResult, ClassificationLabel } from "../types/classification";
 import type { Env } from "../types/env";
 import type { DraftStatus } from "../types/draft";
@@ -159,29 +158,4 @@ export async function handleTriageResult(
   }
 }
 
-/**
- * @deprecated Use handleTriageResult() instead.
- * Legacy handler for timer-based processing that still uses ClassificationResult.
- */
-export async function handleResponse(
-  env: Env,
-  chatId: number,
-  classification: { label: string; confidence: number; method: string; reasoning: string },
-  _dbMessageId?: number,
-  _toolContext?: string,
-  _toolResults?: Array<{ tool: string; result: unknown; summary: string }>,
-): Promise<void> {
-  // Map old classification to a triage result and delegate
-  const triage: TriageResult = {
-    label: classification.label as TriageResult["label"],
-    confidence: classification.confidence,
-    method: classification.method as TriageResult["method"],
-    reasoning: classification.reasoning,
-    // No draft from timer — escalate to let humans handle
-    action: "escalate",
-    draft: null,
-    draftConfidence: null,
-  };
 
-  await handleTriageResult(env, chatId, triage, _dbMessageId);
-}

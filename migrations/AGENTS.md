@@ -9,12 +9,22 @@
 | `0001_initial_schema.sql` | Core tables (chats, messages, classifications, drafts, etc.) |
 | `0002_chat_approval.sql` | Approval system, pending_approvals, daily_stats, app_config |
 | `0003_schema_corrections.sql` | Missing username/reasoning columns (fixes 0002 bug) |
+| `0004_mcp_registry.sql` | MCP server/tool registry tables |
+| `0005_covering_indexes.sql` | Covering indexes for hot queries |
+| `0005_team_and_metrics.sql` | Team member tracking, stale chats, daily summaries |
+| `0006_counter_optimization.sql` | Counter tables for D1 row optimization |
+| `0007_agent_resolution_tracking.sql` | Agent tracking (tables/columns now dropped by 0008) |
+| `0008_drop_agent_schema.sql` | Drops all unused agent tables and columns from 0007 |
 
 ## Tables
 
 **Core:** `chats`, `chat_participants`, `active_messages`, `conversation_state`, `summaries`, `classifications`, `drafts`, `escalations`, `linear_links`, `archives`, `timers`
 
 **Approval system:** `pending_approvals`, `chat_membership_history`, `daily_stats`, `app_config`
+
+**MCP Registry:** `mcp_servers`, `mcp_tools`, `tool_executions`
+
+**Counter optimization:** `chat_message_counts`, `daily_stats_optimized`, `monthly_stats`, `counter_reconciliation_log`
 
 **MCP Registry:** `mcp_servers`, `mcp_tools`, `tool_executions`
 

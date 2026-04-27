@@ -10,8 +10,8 @@ import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { logger } from "./logger";
 import { getErrorMessage } from "./errors";
+import type { TelemetryOptions, PostHogClient } from "./telemetry";
 import { withTelemetry } from "./telemetry";
-import type { TelemetryOptions } from "./telemetry";
 
 export type AIProvider =
   | "workers-ai"
@@ -155,14 +155,17 @@ export function getModel(env: Env, task: AITask): LanguageModel {
 /**
  * Get a language model for a task, wrapped with PostHog telemetry.
  * Falls back to untraced model if telemetry is not configured.
+ *
+ * Accepts an optional PostHog client created via createPostHogClient().
+ * If no client is provided, returns an untraced model.
  */
 export function getTracedModel(
   env: Env,
   task: AITask,
-  telemetryOptions?: TelemetryOptions
+  telemetryOptions?: TelemetryOptions & { posthogClient?: PostHogClient }
 ): LanguageModel {
   const model = getModel(env, task);
-  return withTelemetry(model, env, telemetryOptions);
+  return withTelemetry(model, telemetryOptions?.posthogClient ?? null, telemetryOptions);
 }
 
 function getProviderApiKeyName(provider: AIProvider): string {

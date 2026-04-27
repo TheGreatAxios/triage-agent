@@ -6,40 +6,39 @@
  * generateText/streamText call.
  *
  * No-op when POSTHOG_API_KEY is not set.
+ *
+ * Cloudflare Workers notes:
+ * - Per-request client instantiation (not module-level singleton)
+ * - flushAt=1, flushInterval=0 to send events immediately
+ * - shutdown() called via ctx.waitUntil after pipeline completes
+ * - Uses posthog-node/workerd entrypoint (no nodejs_compat needed)
  */
 import { withTracing } from "@posthog/ai";
 import type { LanguageModel } from "ai";
 import type { Env } from "../types/env";
 import { logger } from "./logger";
 
-let posthogClient: InstanceType<typeof import("posthog-node").PostHog> | null = null;
-let initialized = false;
-
 /**
- * Lazy-initialize the PostHog client.
- * Safe to call multiple times — returns the same singleton.
+ * Create a fresh PostHog client for this request.
+ * Workers isolates are stateless — per-request is safer than module-level singletons.
+ * flushAt=1 and flushInterval=0 ensure events are sent immediately
+ * (no batching, no data loss when the worker terminates).
  */
-function getPostHogClient(env: Env) {
-  if (initialized) return posthogClient;
-
-  initialized = true;
-
-  if (!env.POSTHOG_API_KEY) {
-    logger.info("PostHog telemetry disabled — POSTHOG_API_KEY not set");
-    return null;
-  }
+export function createPostHogClient(env: Env) {
+  if (!env.POSTHOG_API_KEY) return null;
 
   try {
-    // posthog-node edge entrypoint is Workers-compatible
+    // Dynamic import to avoid bundling posthog-node when not needed
     const { PostHog } = require("posthog-node") as typeof import("posthog-node");
 
-    posthogClient = new PostHog(env.POSTHOG_API_KEY, {
+    const client = new PostHog(env.POSTHOG_API_KEY, {
       host: env.POSTHOG_HOST || "https://us.i.posthog.com",
+      flushAt: 1,         // Send every event immediately
+      flushInterval: 0,   // Don't wait for interval
       enableExceptionAutocapture: false,
     });
 
-    logger.info("PostHog telemetry initialized");
-    return posthogClient;
+    return client;
   } catch (err) {
     logger.warn("Failed to initialize PostHog client", {
       error: err instanceof Error ? err.message : String(err),
@@ -47,6 +46,8 @@ function getPostHogClient(env: Env) {
     return null;
   }
 }
+
+export type PostHogClient = ReturnType<typeof createPostHogClient>;
 
 export interface TelemetryOptions {
   /** Group events by this identifier (e.g. chatId, messageId) */
@@ -65,16 +66,12 @@ export interface TelemetryOptions {
  */
 export function withTelemetry(
   model: LanguageModel,
-  env: Env,
+  posthogClient: ReturnType<typeof createPostHogClient>,
   options: TelemetryOptions = {}
 ): LanguageModel {
-  const client = getPostHogClient(env);
+  if (!posthogClient) return model;
 
-  if (!client) {
-    return model;
-  }
-
-  return withTracing(model, client, {
+  return withTracing(model, posthogClient, {
     posthogDistinctId: options.distinctId,
     posthogProperties: options.properties,
     posthogPrivacyMode: options.privacyMode,
@@ -83,11 +80,11 @@ export function withTelemetry(
 }
 
 /**
- * Flush any pending PostHog events.
- * Call at the end of request handling (e.g. in ctx.waitUntil or before response).
+ * Flush and shut down a PostHog client.
+ * Must be called at the end of request handling via ctx.waitUntil.
  */
-export async function flushTelemetry(): Promise<void> {
-  if (posthogClient) {
-    await posthogClient.shutdown();
+export async function shutdownPostHog(client: ReturnType<typeof createPostHogClient>): Promise<void> {
+  if (client) {
+    await client.shutdown();
   }
 }

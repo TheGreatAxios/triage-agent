@@ -1,7 +1,7 @@
 import type { Env } from "../types/env";
-import type { ClassificationResult } from "../types/classification";
+import type { TriageResult } from "../types/classification";
 import { getFiredTimers, markTimerFired } from "../lib/state";
-import { handleResponse } from "./respond";
+import { handleTriageResult } from "./respond";
 import { logger } from "../lib/logger";
 import { expirePendingApprovals } from "../lib/approval";
 import { sendDailySummary as sendApprovalDailySummary, sendStaleAlert, sendDailySummaryWebhook } from "../lib/slack";
@@ -73,7 +73,7 @@ export async function processTimers(env: Env): Promise<number> {
           });
         }
 
-        await handleResponse(env, timer.chatId, classification, undefined, toolContext);
+        await handleTriageResult(env, timer.chatId, triageFromTimer(classification));
       } else {
         logger.warn("No classification found for timer chat", {
           timerId: timer.id,
@@ -164,7 +164,7 @@ export async function processTimers(env: Env): Promise<number> {
 async function getLatestClassification(
   db: D1Database,
   chatId: number
-): Promise<ClassificationResult | null> {
+): Promise<TriageResult | null> {
   const row = await db
     .prepare(
       `SELECT label, confidence, method
@@ -178,25 +178,39 @@ async function getLatestClassification(
 
   if (!row) return null;
 
-  // Validate label is a valid ClassificationLabel
-  const validLabels: ClassificationResult["label"][] = ["bug", "request", "normal", "unknown"];
-  if (!validLabels.includes(row.label as ClassificationResult["label"])) {
+  const validLabels = ["bug", "request", "normal", "unknown"];
+  if (!validLabels.includes(row.label)) {
     logger.warn("Invalid classification label in database", { label: row.label, chatId });
     return null;
   }
 
-  // Validate method is a valid ClassificationMethod
-  const validMethods: ClassificationResult["method"][] = ["rule", "model"];
-  if (!validMethods.includes(row.method as ClassificationResult["method"])) {
+  const validMethods = ["rule", "model"];
+  if (!validMethods.includes(row.method)) {
     logger.warn("Invalid classification method in database", { method: row.method, chatId });
     return null;
   }
 
   return {
-    label: row.label as ClassificationResult["label"],
+    label: row.label as TriageResult["label"],
     confidence: row.confidence,
-    method: row.method as ClassificationResult["method"],
+    method: row.method as TriageResult["method"],
     reasoning: "From latest classification",
+    action: "escalate",
+    draft: null,
+    draftConfidence: null,
+  };
+}
+
+/**
+ * Map a stored classification to a TriageResult for the timer path.
+ * Timers always escalate — the original triage window has passed.
+ */
+function triageFromTimer(classification: TriageResult): TriageResult {
+  return {
+    ...classification,
+    action: "escalate",
+    draft: null,
+    draftConfidence: null,
   };
 }
 
