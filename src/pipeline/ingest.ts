@@ -1,10 +1,9 @@
 import type { TelegramUpdate } from "../types/telegram";
 import type { InternalEvent } from "../types/events";
 import type { Env } from "../types/env";
-import type { AgentInput } from "../types/agent";
 import { normalizeUpdate } from "../lib/normalizer";
 import { persistEvent, persistClassification, getChatByTelegramId } from "../lib/persistence";
-import { classifyMessage, shouldElevateToAgent } from "../lib/classifier";
+import { classifyMessage } from "../lib/classifier";
 import { updateConversationState, scheduleNoResponseTimer, cancelTimers, getConversationState } from "../lib/state";
 import { handleResponse } from "./respond";
 import { trackPipelineMetrics } from "../lib/metrics";
@@ -18,8 +17,6 @@ import {
   ensureFirstCustomerMessage,
   getTeamMemberByUsername,
 } from "../lib/team";
-import { executeAgent, handleAgentOutput } from "../lib/agent/unifiedAgent";
-import { debounceMessage, processExpiredDebounces } from "../lib/agent/debounce";
 import { getConfig } from "../lib/config";
 
 /**
@@ -141,13 +138,13 @@ export async function ingestUpdate(
   }
 
   // ============================================================================
-  // TIERED CLASSIFICATION & RESPONSE PIPELINE
+  // CLASSIFY → DRAFT → RESPOND PIPELINE
   // ============================================================================
 
+  // Step 1: Classify (rules → AI model fallback)
   let classification;
   const classifyStart = Date.now();
   try {
-    // TIER 1 & 2: Regex pre-filter + Rule-based classification
     classification = await classifyMessage(env, event);
     await persistClassification(env.DB, dbMessageId, dbChatId, classification);
     trackPipelineMetrics({ chatId: event.chatId, stage: "classify", durationMs: Date.now() - classifyStart, success: true });
@@ -159,119 +156,18 @@ export async function ingestUpdate(
     });
   }
 
-  // Skip response handling for bot messages
+  // Skip response handling if classification failed or sender is a bot
   if (!classification || event.sender.isBot) {
     return event;
   }
 
-  // TIER 3: Check if we should elevate to Unified Agent
-  if (shouldElevateToAgent(classification)) {
-    // Apply debounce to batch rapid messages
-    const debounceResult = await debounceMessage(env.DB, dbChatId, event, dbMessageId);
-
-    if (!debounceResult.shouldTriggerAgent) {
-      // Message debounced - agent will be triggered after debounce period
-      logger.debug("Message debounced for agent batching", {
-        chatId: dbChatId,
-        debounceId: debounceResult.debounceId,
-        batchedCount: debounceResult.batchedMessages.length,
-      });
-      return event;
-    }
-
-    // Debounce elapsed - trigger agent with batched context
-    const agentStart = Date.now();
-    try {
-      // Build agent input with batched messages
-      const lastMessage = debounceResult.batchedMessages[debounceResult.batchedMessages.length - 1] || {
-        messageId: dbMessageId,
-        text: event.text,
-        sender: {
-          id: event.sender.id,
-          name: event.sender.name,
-          username: event.sender.username,
-          isBot: event.sender.isBot,
-        },
-        timestamp: event.timestamp,
-      };
-
-      const agentInput: AgentInput = {
-        chatId: dbChatId,
-        telegramChatId: event.chatId,
-        messageId: lastMessage.messageId,
-        text: lastMessage.text,
-        sender: lastMessage.sender,
-        timestamp: lastMessage.timestamp,
-        isMention: event.isMention,
-        batchedMessages: debounceResult.batchedMessages.slice(0, -1),
-      };
-
-      // Execute unified agent
-      const agentOutput = await executeAgent(env, agentInput);
-
-      // Handle agent decision
-      await handleAgentOutput(env, dbChatId, lastMessage.messageId, agentOutput, classification);
-
-      trackPipelineMetrics({
-        chatId: event.chatId,
-        stage: "agent",
-        durationMs: Date.now() - agentStart,
-        success: agentOutput.action !== "escalate" || agentOutput.confidence > 0,
-      });
-
-      logger.info("Unified Agent processed batched messages", {
-        chatId: dbChatId,
-        batchedCount: debounceResult.batchedMessages.length,
-        action: agentOutput.action,
-        confidence: agentOutput.confidence,
-        resolutionSignal: agentOutput.resolutionSignal,
-        executionTimeMs: agentOutput.executionTimeMs,
-      });
-    } catch (err) {
-      trackPipelineMetrics({ chatId: event.chatId, stage: "agent", durationMs: Date.now() - agentStart, success: false });
-      logger.error("Unified Agent execution failed", {
-        chatId: dbChatId,
-        error: getErrorMessage(err),
-      });
-
-      // Fallback: escalate to human on agent failure
-      try {
-        const { escalateToSlack, getChatTitle } = await import("../lib/escalation");
-        const [chatTitle, recentMessages] = await Promise.all([
-          getChatTitle(env.DB, dbChatId),
-          import("../lib/queries").then((mod) =>
-            mod.getFormattedMessagesForEscalation(env.DB, dbChatId, 5)
-          ),
-        ]);
-
-        await escalateToSlack(env.DB, env.SLACK_WEBHOOK_URL, {
-          chatId: dbChatId,
-          chatTitle,
-          draftId: null,
-          draftContent: "Agent failed - manual review needed",
-          classification,
-          reason: `Agent execution failed: ${getErrorMessage(err)}`,
-          recentMessages,
-          responseConfidence: 0,
-        });
-      } catch (escalationErr) {
-        logger.error("Agent fallback escalation also failed", {
-          chatId: dbChatId,
-          error: getErrorMessage(escalationErr),
-        });
-      }
-    }
-
-    return event;
-  }
-
-  // LEGACY FLOW: Handle Tier 1/2 classifications (bug, request, normal)
-  // Bug/Request: immediate triage (Slack + Linear)
-  // Normal: schedule timer for delayed draft (60s wait for potential human response)
-  if (classification.label === "bug" || classification.label === "request") {
+  // Step 2: Draft → Respond
+  // bug/request/unknown: immediate draft + respond (policy decides auto_send/escalate/draft_only)
+  // normal: schedule timer for delayed draft (wait for potential human response)
+  if (classification.label === "bug" || classification.label === "request" || classification.label === "unknown") {
     const respondStart = Date.now();
     try {
-      // Load and execute MCP tools in parallel for additional context
+      // Load and execute MCP tools for additional context
       const mcpServers = await loadMCPServers(
         env.DB,
         "default",
@@ -296,7 +192,7 @@ export async function ingestUpdate(
       trackPipelineMetrics({ chatId: event.chatId, stage: "respond", durationMs: Date.now() - respondStart, success: true });
     } catch (err) {
       trackPipelineMetrics({ chatId: event.chatId, stage: "respond", durationMs: Date.now() - respondStart, success: false });
-      logger.error("Failed to handle response for bug/request", {
+      logger.error("Failed to handle response", {
         update_id: event.id,
         error: getErrorMessage(err),
       });

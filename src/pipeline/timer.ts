@@ -9,7 +9,6 @@ import { calculateAndStoreDailyStats } from "../lib/persistence";
 import { loadMCPServers, executeTools, formatToolContext } from "../lib/mcp";
 import { getRecentMessagesWithSenders } from "../lib/queries";
 import { getErrorMessage } from "../lib/errors";
-import { processExpiredDebounces } from "../lib/agent/debounce";
 import {
   getStaleChats,
   recordStaleAlert,
@@ -98,14 +97,6 @@ export async function processTimers(env: Env): Promise<number> {
         error: getErrorMessage(err),
       });
     }
-  }
-
-  // Process expired debounces (20s window elapsed, trigger agent for batched messages)
-  try {
-    await processExpiredDebounces(env.DB, env);
-    logger.debug("Expired debounces processed");
-  } catch (err) {
-    logger.error("Failed to process expired debounces", { error: getErrorMessage(err) });
   }
 
   // Check for stale chats needing attention (4+ hours no response)

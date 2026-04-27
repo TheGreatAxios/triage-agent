@@ -358,11 +358,10 @@ export async function classifyByModel(
 }
 
 /**
- * Full classification pipeline: Tier 1/2 rules only.
- * Returns "unknown" for cases that should be elevated to the Unified Agent.
+ * Full classification pipeline: Tier 1/2 rules → Tier 3 AI model fallback.
  *
- * This is the NEW pipeline - caller should check for "unknown" and invoke
- * the Unified Agent for resolution detection and response generation.
+ * Rule-based classification is tried first (fast, free).
+ * If rules return "unknown", the AI model classifies the message.
  */
 export async function classifyMessage(
   env: Env,
@@ -371,22 +370,22 @@ export async function classifyMessage(
   const ruleResult = classifyByRules(event);
 
   if (ruleResult.label !== "unknown") {
-    logger.debug("Classified by Tier 1/2 rules", {
+    logger.debug("Classified by rules", {
       messageId: event.messageId,
       label: ruleResult.label,
       confidence: ruleResult.confidence,
-      tier: ruleResult.method === "rule" ? 1 : 2,
+      method: ruleResult.method,
     });
     return ruleResult;
   }
 
-  // Return "unknown" - caller should invoke Unified Agent (Tier 3)
-  logger.debug("Tier 1/2 inconclusive - elevate to Agent", {
+  // Tier 3: AI model classification for ambiguous messages
+  logger.debug("Rules inconclusive, falling back to AI model", {
     messageId: event.messageId,
     reasoning: ruleResult.reasoning,
   });
 
-  return ruleResult;
+  return classifyByModel(env, event);
 }
 
 /**
