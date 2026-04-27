@@ -49,8 +49,7 @@ async function checkLink(
   url: string,
   timeoutMs?: number
 ): Promise<LinkCheckResult> {
-  const config = getConfig();
-  const effectiveTimeout = timeoutMs ?? config.linkValidationTimeout ?? 5000;
+  const effectiveTimeout = timeoutMs ?? 5000;
 
   // Try HEAD first
   try {
@@ -148,7 +147,7 @@ export async function validateLinks(text: string): Promise<LinkCheckResult[]> {
 
   const config = getConfig();
   const checks = await Promise.all(
-    urls.map((url) => checkLink(url, config.linkValidationTimeout))
+    urls.map((url) => checkLink(url, undefined))
   );
 
   const invalid = checks.filter((c) => !c.valid);

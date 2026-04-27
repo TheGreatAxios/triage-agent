@@ -29,7 +29,7 @@ export type AIProvider =
   | "huggingface"
   | "xai";
 
-export type AITask = "classify" | "draft" | "summarize" | "agent";
+export type AITask = "classify" | "draft" | "summarize" | "agent" | "triage";
 
 export interface ModelConfig {
   provider: AIProvider;
@@ -69,6 +69,14 @@ export interface ModelConfig {
  * - All tasks: OpenAI gpt-5.4-nano (flex tier, reasoning=none)
  */
 const TASK_MODELS: Record<AITask, [ModelConfig, ModelConfig, ModelConfig]> = {
+  triage: [
+    // Tier 1: NVIDIA step-3.5-flash — strong enough for classify + draft in one call
+    { provider: "nvidia", model: "deepseek-ai/deepseek-v4-flash" },
+    // Tier 2: OpenRouter free model
+    { provider: "openrouter", model: "google/gemma-3-27b-it:free" },
+    // Tier 3: OpenAI gpt-5.4-nano with flex tier, reasoningEffort=none
+    { provider: "openai", model: "gpt-5.4-nano" },
+  ],
   classify: [
     // Tier 1: IBM Granite 4.0 - cheapest CF Workers model (1,542 neurons/M input)
     { provider: "workers-ai", model: "@cf/ibm-granite/granite-4.0-h-micro" },
@@ -345,6 +353,7 @@ export function resolveModel(env: Env, config: ModelConfig): LanguageModel {
  */
 export function getTaskModels(): Record<AITask, ModelConfig> {
   return {
+    triage: TASK_MODELS.triage[0],
     classify: TASK_MODELS.classify[0],
     draft: TASK_MODELS.draft[0],
     summarize: TASK_MODELS.summarize[0],

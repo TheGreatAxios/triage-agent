@@ -15,3 +15,19 @@ export interface ClassificationResult {
   /** Human-readable reasoning for the classification */
   reasoning: string;
 }
+
+/** Action the triage agent decided to take. */
+export type TriageAction = "auto_send" | "escalate" | "draft_only" | "defer";
+
+/** Single-call triage result: classify + draft + action decision. */
+export interface TriageResult {
+  label: ClassificationLabel;
+  confidence: number;
+  method: ClassificationMethod;
+  reasoning: string;
+  action: TriageAction;
+  /** Draft response text — null when action is "defer" */
+  draft: string | null;
+  /** AI self-assessment of draft quality (0–1) — null when no draft */
+  draftConfidence: number | null;
+}

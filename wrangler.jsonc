@@ -10,6 +10,7 @@
 		{
 			"binding": "DB",
 			"database_name": "triage-agent-db",
+            "database_id": "639b0de2-188a-4265-9501-933c44a1d7fc",
 			"migrations_dir": "migrations"
 		}
 	],

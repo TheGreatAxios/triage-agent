@@ -3,25 +3,25 @@ import type { InternalEvent } from "../types/events";
 import type { Env } from "../types/env";
 import { normalizeUpdate } from "../lib/normalizer";
 import { persistEvent, persistClassification, getChatByTelegramId } from "../lib/persistence";
-import { classifyMessage } from "../lib/classifier";
-import { updateConversationState, scheduleNoResponseTimer, cancelTimers, getConversationState } from "../lib/state";
-import { handleResponse } from "./respond";
+import { triageMessage } from "../lib/classifier";
+import { updateConversationState, scheduleNoResponseTimer, cancelTimers } from "../lib/state";
+import { handleTriageResult } from "./respond";
 import { trackPipelineMetrics } from "../lib/metrics";
 import { logger } from "../lib/logger";
 import { handleBotAddedToChat, handleBotRemovedFromChat } from "../lib/approval";
 import { getErrorMessage } from "../lib/errors";
-import { loadMCPServers, executeTools, formatToolContext, type ToolResult } from "../lib/mcp";
 import {
   isTeamMember,
   recordTeamTouch,
   ensureFirstCustomerMessage,
   getTeamMemberByUsername,
 } from "../lib/team";
-import { getConfig } from "../lib/config";
+import { getOrRefreshSummary } from "../lib/summary";
+import { getRecentMessagesWithSenders, buildMessageContext } from "../lib/queries";
 
 /**
- * Full ingestion pipeline: validate → normalize → persist.
- * Returns the normalized event if processed, null if skipped.
+ * Full ingestion pipeline: validate → normalize → persist → triage → act.
+ * Single LLM call for classify + draft + action decision.
  */
 export async function ingestUpdate(
   env: Env,
@@ -30,16 +30,10 @@ export async function ingestUpdate(
   // Handle bot being added/removed from chats first
   if (update.my_chat_member || update.chat_member) {
     const wasAdded = await handleBotAddedToChat(env, update);
-    if (wasAdded) {
-      // Approval request sent, stop processing
-      return null;
-    }
+    if (wasAdded) return null;
 
     const wasRemoved = await handleBotRemovedFromChat(env, update);
-    if (wasRemoved) {
-      // Chat removed, stop processing
-      return null;
-    }
+    if (wasRemoved) return null;
   }
 
   // Check if update is processable as a message
@@ -66,7 +60,7 @@ export async function ingestUpdate(
   ).bind(event.messageId, event.chatId).first<{ id: number }>();
 
   if (existingMessage) {
-    logger.info("Message already processed - skipping", { messageId: event.messageId, chatId: event.chatId });
+    logger.info("Message already processed — skipping", { messageId: event.messageId, chatId: event.chatId });
     return event;
   }
 
@@ -78,7 +72,7 @@ export async function ingestUpdate(
       chat_title: message.chat.title,
       approval_status: chatRecord?.approval_status || "unknown",
     });
-    return null; // Bot acts invisible in unapproved chats
+    return null;
   }
 
   let dbChatId: number;
@@ -104,29 +98,19 @@ export async function ingestUpdate(
   const isTeam = await isTeamMember(env.DB, senderUsername);
 
   if (isTeam) {
-    // Get team member details
     const teamMember = await getTeamMemberByUsername(env.DB, senderUsername);
     if (teamMember) {
-      // Record this touch
       await recordTeamTouch(env.DB, dbChatId, teamMember.id, event.timestamp);
-
-      // Cancel any pending timers since human is handling
       await cancelTimers(env.DB, dbChatId);
-
-      logger.info("Team member response - skipping AI pipeline", { chatId: dbChatId, teamMember: teamMember.telegramUsername });
-
-      // Skip AI processing entirely - human is handling
+      logger.info("Team member response — skipping AI pipeline", { chatId: dbChatId, teamMember: teamMember.telegramUsername });
       return event;
     }
   } else {
-    // Not a team member - this might be the first customer message
     await ensureFirstCustomerMessage(env.DB, dbChatId, senderUsername, event.timestamp);
   }
 
   try {
     await updateConversationState(env.DB, dbChatId, event);
-
-    // Cancel any pending timers when a human responds (non-bot, non-team)
     if (!event.sender.isBot && !isTeam) {
       await cancelTimers(env.DB, dbChatId);
     }
@@ -137,79 +121,64 @@ export async function ingestUpdate(
     });
   }
 
+  // Skip AI pipeline for bot messages
+  if (event.sender.isBot) return event;
+
   // ============================================================================
-  // CLASSIFY → DRAFT → RESPOND PIPELINE
+  // TRIAGE: Single LLM call — classify + draft + action
   // ============================================================================
 
-  // Step 1: Classify (rules → AI model fallback)
-  let classification;
-  const classifyStart = Date.now();
+  const triageStart = Date.now();
   try {
-    classification = await classifyMessage(env, event);
-    await persistClassification(env.DB, dbMessageId, dbChatId, classification);
-    trackPipelineMetrics({ chatId: event.chatId, stage: "classify", durationMs: Date.now() - classifyStart, success: true });
+    // Build conversation context for the LLM
+    const context = await buildContext(env.DB, dbChatId);
+
+    const triage = await triageMessage(env, event, context);
+
+    // Persist classification for analytics / timer lookups
+    await persistClassification(env.DB, dbMessageId, dbChatId, {
+      label: triage.label,
+      confidence: triage.confidence,
+      method: triage.method,
+      reasoning: triage.reasoning,
+    });
+
+    trackPipelineMetrics({ chatId: event.chatId, stage: "triage", durationMs: Date.now() - triageStart, success: true });
+
+    // Act on the result
+    await handleTriageResult(env, dbChatId, triage, dbMessageId);
   } catch (err) {
-    trackPipelineMetrics({ chatId: event.chatId, stage: "classify", durationMs: Date.now() - classifyStart, success: false });
-    logger.error("Failed to classify message", {
+    trackPipelineMetrics({ chatId: event.chatId, stage: "triage", durationMs: Date.now() - triageStart, success: false });
+    logger.error("Triage pipeline failed", {
       update_id: event.id,
       error: getErrorMessage(err),
     });
   }
 
-  // Skip response handling if classification failed or sender is a bot
-  if (!classification || event.sender.isBot) {
-    return event;
-  }
-
-  // Step 2: Draft → Respond
-  // bug/request/unknown: immediate draft + respond (policy decides auto_send/escalate/draft_only)
-  // normal: schedule timer for delayed draft (wait for potential human response)
-  if (classification.label === "bug" || classification.label === "request" || classification.label === "unknown") {
-    const respondStart = Date.now();
-    try {
-      // Load and execute MCP tools for additional context
-      const mcpServers = await loadMCPServers(
-        env.DB,
-        "default",
-        classification.label,
-        classification.confidence
-      );
-
-      let toolContext = "";
-      let toolResults: ToolResult[] = [];
-      if (mcpServers.length > 0) {
-        toolResults = await executeTools(env, mcpServers, event.text);
-        toolContext = formatToolContext(toolResults);
-
-        logger.debug("MCP tools executed", {
-          chatId: dbChatId,
-          toolsUsed: toolResults.map((r) => r.tool).join(","),
-          resultsCount: toolResults.filter((r) => r.result).length,
-        });
-      }
-
-      await handleResponse(env, dbChatId, classification, dbMessageId, toolContext, toolResults);
-      trackPipelineMetrics({ chatId: event.chatId, stage: "respond", durationMs: Date.now() - respondStart, success: true });
-    } catch (err) {
-      trackPipelineMetrics({ chatId: event.chatId, stage: "respond", durationMs: Date.now() - respondStart, success: false });
-      logger.error("Failed to handle response", {
-        update_id: event.id,
-        error: getErrorMessage(err),
-      });
-    }
-  } else if (classification.label === "normal") {
-    // Schedule timer to check for human response and draft if needed
-    try {
-      await scheduleNoResponseTimer(env.DB, dbChatId, "no_response");
-    } catch (err) {
-      logger.error("Failed to schedule timer for normal message", {
-        update_id: event.id,
-        error: getErrorMessage(err),
-      });
-    }
-  }
-
   return event;
+}
+
+/**
+ * Build conversation context string for the triage LLM.
+ */
+async function buildContext(db: D1Database, chatId: number): Promise<string> {
+  const summary = await getOrRefreshSummary(db, chatId);
+
+  const messages = await getRecentMessagesWithSenders(db, {
+    chatId,
+    limit: 10,
+    order: "desc",
+  });
+
+  const recentMessages = buildMessageContext(messages.reverse());
+
+  let context = "";
+  if (summary) {
+    context += `Summary:\n${summary.content}\n\n`;
+  }
+  context += `Recent messages:\n${recentMessages}`;
+
+  return context;
 }
 
 function isProcessableUpdate(update: TelegramUpdate): boolean {
