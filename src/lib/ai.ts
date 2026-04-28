@@ -46,8 +46,8 @@ export interface ModelConfig {
  * Mix and match for cost/performance optimization.
  *
  * Examples:
- * - classify: { provider: "workers-ai", model: "@cf/meta/llama-3.1-8b-instruct" }
- * - draft: { provider: "workers-ai", model: "@cf/meta/llama-3.1-8b-instruct-fp8-fast" }
+ * - classify: { provider: "workers-ai", model: "@cf/zai-org/glm-4.7-flash" }
+ * - draft: { provider: "workers-ai", model: "@cf/zai-org/glm-4.7-flash" }
  * - summarize: { provider: "openrouter", model: "google/gemma-4-26b-a4b-it:free" }
  *
  * Self-hosted example:
@@ -57,11 +57,11 @@ export interface ModelConfig {
  * Multi-tier fallback strategy — Cloudflare Workers AI primary:
  *
  * TIER 1 (Primary — Cloudflare Workers AI):
- * - triage:   Llama 3.1 8B FP8 Fast ($0.045/$0.384 per M tokens)
- * - classify: IBM Granite 4.0 Micro ($0.017/$0.112 per M tokens)
- * - draft:    Llama 3.1 8B FP8 Fast
+ * - triage:   GLM 4.7 Flash (fast, multilingual, 131k ctx)
+ * - classify: GLM 4.7 Flash (fast, multilingual, 131k ctx)
+ * - draft:    GLM 4.7 Flash (fast, multilingual, 131k ctx)
  * - summarize: OpenRouter free model
- * - agent:    Llama 3.1 8B FP8 Fast
+ * - agent:    GLM 4.7 Flash (fast, multilingual, 131k ctx)
  *
  * TIER 2 (Fallback — OpenRouter free):
  * - All tasks: google/gemma-3-27b-it:free
@@ -71,24 +71,24 @@ export interface ModelConfig {
  */
 const TASK_MODELS: Record<AITask, [ModelConfig, ModelConfig, ModelConfig]> = {
   triage: [
-    // Tier 1: Llama 3.1 8B FP8 Fast — best value on Workers AI ($0.045/$0.384 per M)
-    { provider: "workers-ai", model: "@cf/meta/llama-3.1-8b-instruct-fp8-fast" },
+    // Tier 1: GLM 4.7 Flash — fast, multilingual, 131k ctx
+    { provider: "workers-ai", model: "@cf/zai-org/glm-4.7-flash" },
     // Tier 2: OpenRouter free model
     { provider: "openrouter", model: "google/gemma-3-27b-it:free" },
     // Tier 3: OpenAI gpt-5.4-nano (flex tier, reasoningEffort=none)
     { provider: "openai", model: "gpt-5.4-nano" },
   ],
   classify: [
-    // Tier 1: IBM Granite 4.0 Micro — cheapest CF Workers model ($0.017/$0.112 per M)
-    { provider: "workers-ai", model: "@cf/ibm-granite/granite-4.0-h-micro" },
+    // Tier 1: GLM 4.7 Flash — fast, multilingual, 131k ctx
+    { provider: "workers-ai", model: "@cf/zai-org/glm-4.7-flash" },
     // Tier 2: OpenRouter free model
     { provider: "openrouter", model: "google/gemma-3-27b-it:free" },
     // Tier 3: OpenAI gpt-5.4-nano (flex tier, reasoningEffort=none)
     { provider: "openai", model: "gpt-5.4-nano" },
   ],
   draft: [
-    // Tier 1: Llama 3.1 8B FP8 Fast — best value on Workers AI
-    { provider: "workers-ai", model: "@cf/meta/llama-3.1-8b-instruct-fp8-fast" },
+    // Tier 1: GLM 4.7 Flash — fast, multilingual, 131k ctx
+    { provider: "workers-ai", model: "@cf/zai-org/glm-4.7-flash" },
     // Tier 2: OpenRouter free model
     { provider: "openrouter", model: "google/gemma-3-27b-it:free" },
     // Tier 3: OpenAI gpt-5.4-nano (flex tier, reasoningEffort=none)
@@ -103,8 +103,8 @@ const TASK_MODELS: Record<AITask, [ModelConfig, ModelConfig, ModelConfig]> = {
     { provider: "openai", model: "gpt-5.4-nano" },
   ],
   agent: [
-    // Tier 1: Llama 3.1 8B FP8 Fast — fast, cheap, good instruction following
-    { provider: "workers-ai", model: "@cf/meta/llama-3.1-8b-instruct-fp8-fast" },
+    // Tier 1: GLM 4.7 Flash — fast, multilingual, 131k ctx
+    { provider: "workers-ai", model: "@cf/zai-org/glm-4.7-flash" },
     // Tier 2: OpenRouter free model
     { provider: "openrouter", model: "google/gemma-3-27b-it:free" },
     // Tier 3: OpenAI gpt-5.4-nano (flex tier, reasoningEffort=low)
