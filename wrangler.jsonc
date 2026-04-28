@@ -49,6 +49,9 @@
 		  "enabled": true,
 		  "persist": true,
 		  "head_sampling_rate": 1
+		},
+		"source_maps": {
+		  "enabled": true
 		}
 	}
 }

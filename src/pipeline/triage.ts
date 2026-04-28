@@ -6,7 +6,6 @@ import { handleTriageResult } from "./respond";
 import { trackPipelineMetrics } from "../lib/metrics";
 import { logger } from "../lib/logger";
 import { getErrorMessage } from "../lib/errors";
-import { createPostHogClient, shutdownPostHog } from "../lib/telemetry";
 import { getOrRefreshSummary } from "../lib/summary";
 import { getRecentMessagesWithSenders, buildMessageContext } from "../lib/queries";
 
@@ -36,7 +35,6 @@ export async function processTriageMessage(
   msg: TriageMessage,
 ): Promise<void> {
   const triageStart = Date.now();
-  const posthog = createPostHogClient(env);
 
   try {
     // Build conversation context for the LLM
@@ -60,7 +58,7 @@ export async function processTriageMessage(
       timestamp: msg.timestamp,
     };
 
-    const triage = await triageMessage(env, event, context, posthog);
+    const triage = await triageMessage(env, event, context);
 
     // Persist classification for analytics / timer lookups
     await persistClassification(env.DB, msg.dbMessageId, msg.dbChatId, {
@@ -82,8 +80,6 @@ export async function processTriageMessage(
       error: getErrorMessage(err),
     });
     throw err;
-  } finally {
-    await shutdownPostHog(posthog);
   }
 }
 

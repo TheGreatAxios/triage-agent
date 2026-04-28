@@ -3,7 +3,6 @@ import type { InternalEvent } from "../types/events";
 import type { ClassificationLabel, TriageResult } from "../types/classification";
 import type { Env } from "../types/env";
 import { getTracedModel } from "./ai";
-import type { PostHogClient } from "./telemetry";
 import { logger } from "./logger";
 import { getErrorMessage } from "./errors";
 import { sanitizePromptInput, sanitizeContextInput } from "./sanitize";
@@ -55,17 +54,9 @@ export async function triageMessage(
   env: Env,
   event: InternalEvent,
   context: string,
-  posthogClient?: PostHogClient,
 ): Promise<TriageResult> {
   try {
-    const model = getTracedModel(env, "triage", {
-      distinctId: `chat:${event.chatId}`,
-      properties: {
-        task: "triage",
-        messageId: event.messageId,
-      },
-      posthogClient: posthogClient ?? null,
-    });
+    const model = getTracedModel(env, "triage");
 
     const sanitizedContext = sanitizeContextInput(context);
     const sanitizedText = sanitizePromptInput(event.text);
