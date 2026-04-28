@@ -34,17 +34,14 @@ export async function createTriageIssue(
   classification: { label: ClassificationLabel; confidence: number; reasoning: string },
   recentMessages: string[]
 ): Promise<LinearIssueResult | null> {
-  // Validate required UUIDs
+  // teamId is required, stateId is optional (we'll retry without it on validation errors)
   const teamId = validateUUID(env.LINEAR_TEAM_ID, "LINEAR_TEAM_ID");
-  const stateId = validateUUID(env.LINEAR_TRIAGE_STATE_ID, "LINEAR_TRIAGE_STATE_ID");
-
-  if (!teamId || !stateId) {
-    logger.error("Linear issue creation skipped — missing or invalid required IDs", {
-      teamId: !!teamId,
-      stateId: !!stateId,
-    });
+  if (!teamId) {
+    logger.error("Linear issue creation skipped — missing or invalid LINEAR_TEAM_ID");
     return null;
   }
+
+  const stateId = validateUUID(env.LINEAR_TRIAGE_STATE_ID, "LINEAR_TRIAGE_STATE_ID");
 
   // Optional UUIDs
   const projectId = validateUUID(env.LINEAR_PROJECT_ID, "LINEAR_PROJECT_ID");
@@ -94,7 +91,7 @@ export async function createTriageIssue(
     title,
     description,
     teamId,
-    stateId,
+    ...(stateId ? { stateId } : {}),
     ...(projectId ? { projectId } : {}),
     ...(labelId ? { labelIds: [labelId] } : {}),
   };
@@ -128,11 +125,17 @@ export async function createTriageIssue(
     }>();
 
     if (json.errors?.length) {
+      // Log full error details for debugging — Linear puts the specific field
+      // that failed in extensions.type or extensions.userError
+      const errorDetails = json.errors.map((e) => ({
+        message: e.message,
+        extensions: e.extensions ?? {},
+      }));
       logger.error("Linear GraphQL errors", {
-        errors: json.errors.map((e) => ({
-          message: e.message,
-          ...e.extensions,
-        })),
+        errorCount: json.errors.length,
+        errorDetails,
+        // Stringify for Cloudflare Workers log flattening
+        errorDetailRaw: JSON.stringify(errorDetails),
         input: {
           teamId,
           stateId,
@@ -141,6 +144,50 @@ export async function createTriageIssue(
           classification: classification.label,
         },
       });
+
+      // If stateId caused the validation error, retry without it
+      const isValidationError = errorDetails.some(
+        (e) => e.message === "Argument Validation Error"
+      );
+      if (isValidationError && stateId) {
+        logger.info("Retrying Linear issue creation without stateId");
+        const fallbackInput = { ...input };
+        delete (fallbackInput as Record<string, unknown>).stateId;
+        const fallbackResp = await fetch(LINEAR_API_URL, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: env.LINEAR_API_KEY,
+          },
+          body: JSON.stringify({ query: mutation, variables: { input: fallbackInput } }),
+        });
+
+        if (fallbackResp.ok) {
+          const fallbackJson = await fallbackResp.json<{
+            data?: {
+              issueCreate: {
+                success: boolean;
+                issue: { id: string; url: string };
+              };
+            };
+            errors?: { message: string; extensions?: Record<string, unknown> }[];
+          }>();
+
+          if (!fallbackJson.errors?.length && fallbackJson.data?.issueCreate?.success) {
+            const result = fallbackJson.data.issueCreate;
+            logger.info("Linear triage issue created (without stateId)", {
+              issueId: result.issue.id,
+              issueUrl: result.issue.url,
+            });
+            return { issueId: result.issue.id, issueUrl: result.issue.url };
+          }
+
+          logger.warn("Linear fallback (no stateId) also failed", {
+            errors: fallbackJson.errors?.map((e) => e.message),
+          });
+        }
+      }
+
       return null;
     }
 

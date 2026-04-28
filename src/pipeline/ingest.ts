@@ -121,6 +121,15 @@ export async function ingestUpdate(
   // Skip AI pipeline for bot messages
   if (event.sender.isBot) return;
 
+  // Guard: ensure AI binding is available before invoking LLM triage
+  if (!env.AI) {
+    logger.error("AI binding not available — skipping triage", {
+      update_id: update.update_id,
+      chatId: dbChatId,
+    });
+    return;
+  }
+
   // Run triage inline — Workers AI calls complete in 1-3s, well within waitUntil limits
   await processTriageMessage(env, {
     dbChatId,
