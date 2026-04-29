@@ -20,6 +20,7 @@ import { postSlackMessage } from "../lib/slack";
 import { getOrRefreshSummary } from "../lib/summary";
 import { logger } from "../lib/logger";
 import { getErrorMessage } from "../lib/errors";
+import { withTimeout, fireAndForget } from "../lib/timeout";
 
 /**
  * Act on a triage result: auto_send, escalate, draft_only, or defer.
@@ -79,21 +80,26 @@ export async function handleTriageResult(
         getRecentMessagesForEscalation(env.DB, chatId),
       ]);
 
-      const result = await escalateToSlack(env.DB, env.SLACK_WEBHOOK_URL, {
-        chatId,
-        chatTitle,
-        draftId,
-        draftContent,
-        classification: {
-          label: triage.label as ClassificationLabel,
-          confidence: triage.confidence,
-          method: triage.method,
-          reasoning: triage.reasoning,
-        },
-        reason: triage.reasoning,
-        recentMessages,
-        responseConfidence: triage.draftConfidence ?? undefined,
-      });
+      // Timeout Slack escalation at 10s to prevent waitUntil overrun
+      const result = await withTimeout(
+        escalateToSlack(env.DB, env.SLACK_WEBHOOK_URL, {
+          chatId,
+          chatTitle,
+          draftId,
+          draftContent,
+          classification: {
+            label: triage.label as ClassificationLabel,
+            confidence: triage.confidence,
+            method: triage.method,
+            reasoning: triage.reasoning,
+          },
+          reason: triage.reasoning,
+          recentMessages,
+          responseConfidence: triage.draftConfidence ?? undefined,
+        }),
+        10000,
+        "slack_escalation",
+      );
 
       if (result.delivered) {
         logger.info("Draft escalated to Slack", {
@@ -143,77 +149,88 @@ export async function handleTriageResult(
       getRecentMessagesForEscalation(env.DB, chatId),
     ]);
 
-    // Linear triage issue
-    try {
-      const issue = await createTriageIssue(
-        env,
-        chatTitle,
-        {
-          label: triage.label,
-          confidence: triage.confidence,
-          reasoning: triage.reasoning,
-        },
-        recentMessages,
-      );
+    // Run Linear and primary Slack in parallel with timeouts
+    // Notion is fire-and-forget (doesn't block waitUntil completion)
+    const [linearResult] = await Promise.allSettled([
+      withTimeout(
+        createTriageIssue(
+          env,
+          chatTitle,
+          {
+            label: triage.label,
+            confidence: triage.confidence,
+            reasoning: triage.reasoning,
+          },
+          recentMessages,
+        ).then(async (issue) => {
+          if (issue && dbMessageId) {
+            await persistLinearLink(env.DB, chatId, dbMessageId, issue.issueId, issue.issueUrl);
+          }
+          return issue;
+        }),
+        15000,
+        "linear_triage_issue",
+      ),
+    ]);
 
-      if (issue && dbMessageId) {
-        await persistLinearLink(env.DB, chatId, dbMessageId, issue.issueId, issue.issueUrl);
-      }
-    } catch (err) {
-      logger.error("Linear triage issue creation failed", {
-        chatId,
-        error: getErrorMessage(err),
-      });
+    // Log Linear result
+    if (linearResult.status === "fulfilled") {
+      logger.info("Linear triage issue created", { chatId, issueId: linearResult.value?.issueId });
+    } else {
+      logger.error("Linear triage issue failed", { chatId, error: getErrorMessage(linearResult.reason) });
     }
 
-    // Notion: append triage block to project page
-    try {
-      const { appended, suggestion } = await pushTriageToNotion(
-        env,
-        chatId,
-        chatTitle,
-        { label: triage.label, confidence: triage.confidence, reasoning: triage.reasoning },
-        recentMessages,
-      );
-
-      if (appended && dbMessageId) {
-        const projectPageId = await getProjectPageIdCached(env.DB, chatId);
-        if (projectPageId) {
-          await persistNotionLink(env.DB, chatId, dbMessageId, projectPageId, `https://notion.so/${projectPageId.replace(/-/g, "")}`, "block_triage");
-        }
-      } else if (suggestion) {
-        await sendProjectSuggestionToSlack(env, suggestion);
-      }
-    } catch (err) {
-      logger.error("Notion triage push failed", { chatId, error: getErrorMessage(err) });
-    }
-
-    // Notion: append summary block to project page
-    try {
-      const summary = await getOrRefreshSummary(env.DB, chatId);
-      if (summary?.content) {
-        const { appended, suggestion } = await pushSummaryToNotion(
+    // Notion operations are fire-and-forget: don't block waitUntil
+    fireAndForget(
+      async () => {
+        const { appended, suggestion } = await pushTriageToNotion(
           env,
           chatId,
           chatTitle,
-          summary.content,
-          summary.messageRangeEnd && summary.messageRangeStart
-            ? summary.messageRangeEnd - summary.messageRangeStart
-            : 0,
+          { label: triage.label, confidence: triage.confidence, reasoning: triage.reasoning },
+          recentMessages,
         );
 
         if (appended && dbMessageId) {
           const projectPageId = await getProjectPageIdCached(env.DB, chatId);
           if (projectPageId) {
-            await persistNotionLink(env.DB, chatId, dbMessageId, projectPageId, `https://notion.so/${projectPageId.replace(/-/g, "")}`, "block_summary");
+            await persistNotionLink(env.DB, chatId, dbMessageId, projectPageId, `https://notion.so/${projectPageId.replace(/-/g, "")}`, "block_triage");
           }
-        } else if (suggestion) {
+        } else if (suggestion && env.SLACK_BOT_TOKEN && env.SLACK_APPROVAL_CHANNEL_ID) {
           await sendProjectSuggestionToSlack(env, suggestion);
         }
-      }
-    } catch (err) {
-      logger.error("Notion summary push failed", { chatId, error: getErrorMessage(err) });
-    }
+      },
+      "notion_triage_push",
+      logger,
+    );
+
+    fireAndForget(
+      async () => {
+        const summary = await getOrRefreshSummary(env.DB, chatId);
+        if (summary?.content) {
+          const { appended, suggestion } = await pushSummaryToNotion(
+            env,
+            chatId,
+            chatTitle,
+            summary.content,
+            summary.messageRangeEnd && summary.messageRangeStart
+              ? summary.messageRangeEnd - summary.messageRangeStart
+              : 0,
+          );
+
+          if (appended && dbMessageId) {
+            const projectPageId = await getProjectPageIdCached(env.DB, chatId);
+            if (projectPageId) {
+              await persistNotionLink(env.DB, chatId, dbMessageId, projectPageId, `https://notion.so/${projectPageId.replace(/-/g, "")}`, "block_summary");
+            }
+          } else if (suggestion && env.SLACK_BOT_TOKEN && env.SLACK_APPROVAL_CHANNEL_ID) {
+            await sendProjectSuggestionToSlack(env, suggestion);
+          }
+        }
+      },
+      "notion_summary_push",
+      logger,
+    );
   }
 }
 

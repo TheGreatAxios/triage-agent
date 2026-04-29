@@ -35,10 +35,13 @@ export async function processTriageMessage(
   msg: TriageMessage,
 ): Promise<void> {
   const triageStart = Date.now();
+  const stageTimes: Record<string, number> = {};
 
   try {
     // Build conversation context for the LLM
+    const contextStart = Date.now();
     const context = await buildContext(env.DB, msg.dbChatId);
+    stageTimes.build_context = Date.now() - contextStart;
 
     // Reconstruct a minimal InternalEvent for the classifier
     const event: InternalEvent = {
@@ -68,15 +71,26 @@ export async function processTriageMessage(
       reasoning: triage.reasoning,
     });
 
+    stageTimes.llm_triage = Date.now() - triageStart - stageTimes.build_context;
     trackPipelineMetrics({ chatId: msg.telegramChatId, stage: "triage", durationMs: Date.now() - triageStart, success: true });
 
     // Act on the result
+    const handleStart = Date.now();
     await handleTriageResult(env, msg.dbChatId, triage, msg.dbMessageId);
+    stageTimes.handle_result = Date.now() - handleStart;
+
+    logger.info("Triage stage complete", {
+      chatId: msg.dbChatId,
+      messageId: msg.messageId,
+      total_triage_ms: Date.now() - triageStart,
+      stages: stageTimes,
+    });
   } catch (err) {
     trackPipelineMetrics({ chatId: msg.telegramChatId, stage: "triage", durationMs: Date.now() - triageStart, success: false });
     logger.error("Triage pipeline failed", {
       update_id: msg.updateId,
       dbChatId: msg.dbChatId,
+      stages: stageTimes,
       error: getErrorMessage(err),
     });
     throw err;

@@ -24,6 +24,10 @@ export async function ingestUpdate(
   env: Env,
   update: TelegramUpdate
 ): Promise<void> {
+  const pipelineStart = Date.now();
+  const stageTimes: Record<string, number> = {};
+  const stageStart = Date.now();
+
   // Handle bot being added/removed from chats first
   if (update.my_chat_member || update.chat_member) {
     const wasAdded = await handleBotAddedToChat(env, update);
@@ -38,6 +42,7 @@ export async function ingestUpdate(
     logger.debug("Skipping non-processable update", { update_id: update.update_id });
     return;
   }
+  stageTimes.validation = Date.now() - stageStart;
 
   // Normalize the update to internal event format
   const event = normalizeUpdate(update);
@@ -50,6 +55,7 @@ export async function ingestUpdate(
   if (!message) return;
 
   // IDEMPOTENCY: Check if this exact message was already processed
+  const idempotencyStart = Date.now();
   const existingMessage = await env.DB.prepare(
     `SELECT am.id FROM active_messages am
      JOIN chats c ON c.id = am.chat_id
@@ -60,8 +66,10 @@ export async function ingestUpdate(
     logger.info("Message already processed — skipping", { messageId: event.messageId, chatId: event.chatId });
     return;
   }
+  stageTimes.idempotency = Date.now() - idempotencyStart;
 
   // APPROVAL GATE: Check if chat is approved before processing messages
+  const approvalStart = Date.now();
   const chatRecord = await getChatByTelegramId(env.DB, message.chat.id);
   if (!chatRecord || chatRecord.approval_status !== "approved") {
     logger.info("Ignoring message from unapproved chat", {
@@ -71,6 +79,7 @@ export async function ingestUpdate(
     });
     return;
   }
+  stageTimes.approval_gate = Date.now() - approvalStart;
 
   let dbChatId: number;
   let dbMessageId: number;
@@ -89,8 +98,10 @@ export async function ingestUpdate(
     });
     throw err;
   }
+  stageTimes.persist = Date.now() - persistStart;
 
   // TEAM DETECTION: Check if sender is a team member
+  const teamStart = Date.now();
   const senderUsername = event.sender.username || event.sender.name;
   const isTeam = await isTeamMember(env.DB, senderUsername);
 
@@ -99,13 +110,15 @@ export async function ingestUpdate(
     if (teamMember) {
       await recordTeamTouch(env.DB, dbChatId, teamMember.id, event.timestamp);
       await cancelTimers(env.DB, dbChatId);
-      logger.info("Team member response — skipping AI pipeline", { chatId: dbChatId, teamMember: teamMember.telegramUsername });
+      logger.info("Team member response — skipping AI pipeline", { chatId: dbChatId, teamMember: teamMember.telegramUsername, pipeline_duration_ms: Date.now() - pipelineStart });
       return;
     }
   } else {
     await ensureFirstCustomerMessage(env.DB, dbChatId, senderUsername, event.timestamp);
   }
+  stageTimes.team_detection = Date.now() - teamStart;
 
+  const stateStart = Date.now();
   try {
     await updateConversationState(env.DB, dbChatId, event);
     if (!event.sender.isBot && !isTeam) {
@@ -117,9 +130,13 @@ export async function ingestUpdate(
       error: getErrorMessage(err),
     });
   }
+  stageTimes.state_update = Date.now() - stateStart;
 
   // Skip AI pipeline for bot messages
-  if (event.sender.isBot) return;
+  if (event.sender.isBot) {
+    logger.info("Pipeline complete — bot message", { chatId: dbChatId, total_duration_ms: Date.now() - pipelineStart, stages: stageTimes });
+    return;
+  }
 
   // Guard: ensure AI binding is available before invoking LLM triage
   if (!env.AI) {
@@ -131,6 +148,7 @@ export async function ingestUpdate(
   }
 
   // Run triage inline — Workers AI calls complete in 1-3s, well within waitUntil limits
+  const triageStart = Date.now();
   await processTriageMessage(env, {
     dbChatId,
     dbMessageId,
@@ -145,6 +163,16 @@ export async function ingestUpdate(
     updateId: update.update_id,
     messageId: event.messageId,
     timestamp: event.timestamp,
+  });
+  stageTimes.triage = Date.now() - triageStart;
+
+  const totalDuration = Date.now() - pipelineStart;
+  logger.info("Pipeline complete", {
+    chatId: dbChatId,
+    messageId: event.messageId,
+    total_duration_ms: totalDuration,
+    stages: stageTimes,
+    within_waituntil_limit: totalDuration < 25000, // Log if approaching 30s limit
   });
 }
 
