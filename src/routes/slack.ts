@@ -26,6 +26,11 @@ import {
   getBlacklistedChats,
   getPendingApprovalsByFilter,
 } from "../lib/persistence";
+import {
+  createProject,
+  persistProjectMapping,
+} from "../lib/notion";
+import { getChatById } from "../lib/persistence";
 
 export const slackRoutes = new Hono<AppEnv>();
 
@@ -167,6 +172,85 @@ slackRoutes.post("/interactions", async (c) => {
         )
       );
       return c.json({ ok: true });
+    }
+
+    // Handle Notion project link confirmation
+    if (action.action_id === "notion_link_project") {
+      // value format: "chatId:projectPageId:triage|summary"
+      const parts = action.value.split(":");
+      const pChatId = parseInt(parts[0], 10);
+      const projectPageId = parts[1];
+      // const blockType = parts[2] || "triage"; // for future replay
+
+      if (isNaN(pChatId) || !projectPageId) {
+        return c.json({ error: "Invalid payload" }, 400);
+      }
+
+      // Cache the mapping — future triage/summary events will auto-append to this page
+      await persistProjectMapping(c.env.DB, pChatId, projectPageId);
+
+      logger.info("Notion project confirmed via Slack", {
+        chatId: pChatId,
+        projectPageId,
+        confirmedBy: payload.user.name,
+      });
+
+      return c.json({
+        response_type: "ephemeral",
+        text: `✓ Future triage items will be appended to that Notion project page.`,
+      });
+    }
+
+    // Handle Notion "Create New Project"
+    if (action.action_id === "notion_create_project") {
+      // value format: "chatId::triage|summary"
+      const parts = action.value.split("::");
+      const pChatId = parseInt(parts[0], 10);
+      // const blockType = parts[1] || "triage";
+
+      if (isNaN(pChatId)) {
+        return c.json({ error: "Invalid payload" }, 400);
+      }
+
+      const chatRecord = await getChatById(c.env.DB, pChatId);
+      if (!chatRecord) {
+        return c.json({ response_type: "ephemeral", text: "Chat not found" });
+      }
+
+      const project = await createProject(
+        c.env,
+        chatRecord.title || `Chat ${pChatId}`,
+        chatRecord.type,
+        chatRecord.telegram_chat_id,
+      );
+
+      if (project) {
+        await persistProjectMapping(c.env.DB, pChatId, project.pageId);
+
+        logger.info("Notion project created via Slack", {
+          chatId: pChatId,
+          pageId: project.pageId,
+          createdBy: payload.user.name,
+        });
+
+        return c.json({
+          response_type: "ephemeral",
+          text: `✓ Created new Notion project: ${project.pageUrl}`,
+        });
+      }
+
+      return c.json({
+        response_type: "ephemeral",
+        text: "✗ Failed to create Notion project",
+      });
+    }
+
+    // Handle Notion "Skip"
+    if (action.action_id === "notion_skip_project") {
+      return c.json({
+        response_type: "ephemeral",
+        text: "Skipped Notion project linking.",
+      });
     }
 
     // Handle approval/rejection/unblacklist (requires chat ID)

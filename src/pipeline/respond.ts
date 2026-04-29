@@ -9,6 +9,15 @@ import {
   getTelegramChatId,
 } from "../lib/escalation";
 import { createTriageIssue, persistLinearLink } from "../lib/linear";
+import {
+  pushTriageToNotion,
+  pushSummaryToNotion,
+  persistNotionLink,
+  getProjectPageId as getProjectPageIdCached,
+  NotionProjectSuggestion,
+} from "../lib/notion";
+import { postSlackMessage } from "../lib/slack";
+import { getOrRefreshSummary } from "../lib/summary";
 import { logger } from "../lib/logger";
 import { getErrorMessage } from "../lib/errors";
 
@@ -127,14 +136,15 @@ export async function handleTriageResult(
     }
   }
 
-  // Linear triage issue for bugs and requests
+  // Triage issue tracking for bugs and requests (Linear + Notion)
   if (triage.label === "bug" || triage.label === "request") {
-    try {
-      const [chatTitle, recentMessages] = await Promise.all([
-        getChatTitle(env.DB, chatId),
-        getRecentMessagesForEscalation(env.DB, chatId),
-      ]);
+    const [chatTitle, recentMessages] = await Promise.all([
+      getChatTitle(env.DB, chatId),
+      getRecentMessagesForEscalation(env.DB, chatId),
+    ]);
 
+    // Linear triage issue
+    try {
       const issue = await createTriageIssue(
         env,
         chatTitle,
@@ -155,7 +165,142 @@ export async function handleTriageResult(
         error: getErrorMessage(err),
       });
     }
+
+    // Notion: append triage block to project page
+    try {
+      const { appended, suggestion } = await pushTriageToNotion(
+        env,
+        chatId,
+        chatTitle,
+        { label: triage.label, confidence: triage.confidence, reasoning: triage.reasoning },
+        recentMessages,
+      );
+
+      if (appended && dbMessageId) {
+        const projectPageId = await getProjectPageIdCached(env.DB, chatId);
+        if (projectPageId) {
+          await persistNotionLink(env.DB, chatId, dbMessageId, projectPageId, `https://notion.so/${projectPageId.replace(/-/g, "")}`, "block_triage");
+        }
+      } else if (suggestion) {
+        await sendProjectSuggestionToSlack(env, suggestion);
+      }
+    } catch (err) {
+      logger.error("Notion triage push failed", { chatId, error: getErrorMessage(err) });
+    }
+
+    // Notion: append summary block to project page
+    try {
+      const summary = await getOrRefreshSummary(env.DB, chatId);
+      if (summary?.content) {
+        const { appended, suggestion } = await pushSummaryToNotion(
+          env,
+          chatId,
+          chatTitle,
+          summary.content,
+          summary.messageRangeEnd && summary.messageRangeStart
+            ? summary.messageRangeEnd - summary.messageRangeStart
+            : 0,
+        );
+
+        if (appended && dbMessageId) {
+          const projectPageId = await getProjectPageIdCached(env.DB, chatId);
+          if (projectPageId) {
+            await persistNotionLink(env.DB, chatId, dbMessageId, projectPageId, `https://notion.so/${projectPageId.replace(/-/g, "")}`, "block_summary");
+          }
+        } else if (suggestion) {
+          await sendProjectSuggestionToSlack(env, suggestion);
+        }
+      }
+    } catch (err) {
+      logger.error("Notion summary push failed", { chatId, error: getErrorMessage(err) });
+    }
   }
 }
 
+/**
+ * Send a Slack message suggesting a project link for a triage page.
+ * Approver can confirm the match or create a new project.
+ */
+async function sendProjectSuggestionToSlack(
+  env: Env,
+  suggestion: NotionProjectSuggestion,
+): Promise<void> {
+  const { chatId, chatTitle, matches } = suggestion;
+
+  if (!env.SLACK_BOT_TOKEN || !env.SLACK_APPROVAL_CHANNEL_ID) return;
+
+  const blocks: unknown[] = [
+    {
+      type: "header",
+      text: {
+        type: "plain_text",
+        text: "📎 Link Notion Project?",
+        emoji: true,
+      },
+    },
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: `Chat *${chatTitle}* has a new ${suggestion.pendingType} item. Append it to an existing Notion project page?`,
+      },
+    },
+  ];
+
+  // Show matches with confirm buttons
+  for (const match of matches) {
+    blocks.push({
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: `• *${match.title}*`,
+      },
+      accessory: {
+        type: "button",
+        text: {
+          type: "plain_text",
+          text: `Confirm`,
+          emoji: true,
+        },
+        style: "primary",
+        value: `${chatId}:${match.pageId}:${suggestion.pendingType}`,
+        action_id: "notion_link_project",
+      },
+    });
+  }
+
+  // Always show "Create New" and "Skip"
+  blocks.push({
+    type: "actions",
+    elements: [
+      {
+        type: "button",
+        text: {
+          type: "plain_text",
+          text: `Create New Project`,
+          emoji: true,
+        },
+        value: `${chatId}::${suggestion.pendingType}`,
+        action_id: "notion_create_project",
+      },
+      {
+        type: "button",
+        text: {
+          type: "plain_text",
+          text: "Skip",
+          emoji: true,
+        },
+        value: `skip:${chatId}`,
+        action_id: "notion_skip_project",
+      },
+    ],
+  });
+
+  await postSlackMessage(
+    env.SLACK_BOT_TOKEN,
+    env.SLACK_APPROVAL_CHANNEL_ID,
+    `Link Notion project for: ${chatTitle}`,
+    blocks,
+  );
+}
 

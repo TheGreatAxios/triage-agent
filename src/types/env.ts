@@ -11,12 +11,18 @@ export interface Env {
 
   // Escalation & Issue Tracking
   SLACK_WEBHOOK_URL: string;
-  LINEAR_API_KEY: string;
-  LINEAR_TEAM_ID: string;
+
+  // Linear Integration (optional — set all three to enable triage issue creation)
+  LINEAR_API_KEY?: string;
+  LINEAR_TEAM_ID?: string;
+  LINEAR_TRIAGE_STATE_ID?: string;
   LINEAR_PROJECT_ID?: string;
-  LINEAR_TRIAGE_STATE_ID: string;
   LINEAR_LABEL_BUG?: string;
   LINEAR_LABEL_REQUEST?: string;
+
+  // Notion Integration (optional — set both to enable)
+  NOTION_API_KEY?: string;
+  NOTION_PROJECTS_DB_ID?: string;   // Single DB: Projects (triage & summaries appended as child blocks)
 
   // Slack Approval Flow
   SLACK_BOT_TOKEN: string;              // Post messages, open modals (xoxb-...)

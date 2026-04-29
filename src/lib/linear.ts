@@ -34,6 +34,12 @@ export async function createTriageIssue(
   classification: { label: ClassificationLabel; confidence: number; reasoning: string },
   recentMessages: string[]
 ): Promise<LinearIssueResult | null> {
+  // Guard: Linear integration is optional — skip if not configured
+  if (!env.LINEAR_API_KEY || !env.LINEAR_TEAM_ID) {
+    logger.debug("Linear integration not configured — skipping triage issue");
+    return null;
+  }
+
   // teamId is required, stateId is optional (we'll retry without it on validation errors)
   const teamId = validateUUID(env.LINEAR_TEAM_ID, "LINEAR_TEAM_ID");
   if (!teamId) {
