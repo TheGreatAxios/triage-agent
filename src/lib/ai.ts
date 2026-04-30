@@ -56,42 +56,42 @@ export interface ModelConfig {
  * Multi-tier fallback strategy — Cloudflare Workers AI primary:
  *
  * TIER 1 (Primary — Cloudflare Workers AI):
- * - triage:   GLM 4.7 Flash (fast, multilingual, 131k ctx)
- * - classify: GLM 4.7 Flash (fast, multilingual, 131k ctx)
- * - draft:    GLM 4.7 Flash (fast, multilingual, 131k ctx)
+ * - triage:   Llama 3.1 8B Instruct (fast, reliable, widely available)
+ * - classify: Llama 3.1 8B Instruct (fast, reliable, widely available)
+ * - draft:    Llama 3.1 8B Instruct (fast, reliable, widely available)
  * - summarize: OpenRouter free model
- * - agent:    GLM 4.7 Flash (fast, multilingual, 131k ctx)
+ * - agent:    Llama 3.1 8B Instruct (fast, reliable, widely available)
  *
- * TIER 2 (Fallback — OpenRouter free):
- * - All tasks: google/gemma-3-27b-it:free
+ * TIER 2 (Fallback — Workers AI):
+ * - All tasks: Mistral 7B Instruct v0.2
  *
- * TIER 3 (Emergency — OpenAI):
- * - All tasks: gpt-5.4-nano (flex tier, reasoning=none)
+ * TIER 3 (Emergency — OpenRouter):
+ * - All tasks: google/gemma-3-27b-it:free (requires OPENROUTER_API_KEY)
  */
 const TASK_MODELS: Record<AITask, [ModelConfig, ModelConfig, ModelConfig]> = {
   triage: [
-    // Tier 1: GLM 4.7 Flash — fast, multilingual, 131k ctx
-    { provider: "workers-ai", model: "@cf/zai-org/glm-4.7-flash" },
-    // Tier 2: OpenRouter free model
+    // Tier 1: Llama 3.1 8B — fast, reliable, widely available
+    { provider: "workers-ai", model: "@cf/meta/llama-3.1-8b-instruct" },
+    // Tier 2: Mistral 7B — good quality fallback
+    { provider: "workers-ai", model: "@cf/mistral/mistral-7b-instruct-v0.2" },
+    // Tier 3: OpenRouter free model
     { provider: "openrouter", model: "google/gemma-3-27b-it:free" },
-    // Tier 3: OpenAI gpt-5.4-nano (flex tier, reasoningEffort=none)
-    { provider: "openai", model: "gpt-5.4-nano" },
   ],
   classify: [
-    // Tier 1: GLM 4.7 Flash — fast, multilingual, 131k ctx
-    { provider: "workers-ai", model: "@cf/zai-org/glm-4.7-flash" },
-    // Tier 2: OpenRouter free model
+    // Tier 1: Llama 3.1 8B — fast, reliable, widely available
+    { provider: "workers-ai", model: "@cf/meta/llama-3.1-8b-instruct" },
+    // Tier 2: Mistral 7B — good quality fallback
+    { provider: "workers-ai", model: "@cf/mistral/mistral-7b-instruct-v0.2" },
+    // Tier 3: OpenRouter free model
     { provider: "openrouter", model: "google/gemma-3-27b-it:free" },
-    // Tier 3: OpenAI gpt-5.4-nano (flex tier, reasoningEffort=none)
-    { provider: "openai", model: "gpt-5.4-nano" },
   ],
   draft: [
-    // Tier 1: GLM 4.7 Flash — fast, multilingual, 131k ctx
-    { provider: "workers-ai", model: "@cf/zai-org/glm-4.7-flash" },
-    // Tier 2: OpenRouter free model
+    // Tier 1: Llama 3.1 8B — fast, reliable, widely available
+    { provider: "workers-ai", model: "@cf/meta/llama-3.1-8b-instruct" },
+    // Tier 2: Mistral 7B — good quality fallback
+    { provider: "workers-ai", model: "@cf/mistral/mistral-7b-instruct-v0.2" },
+    // Tier 3: OpenRouter free model
     { provider: "openrouter", model: "google/gemma-3-27b-it:free" },
-    // Tier 3: OpenAI gpt-5.4-nano (flex tier, reasoningEffort=none)
-    { provider: "openai", model: "gpt-5.4-nano" },
   ],
   summarize: [
     // Tier 1: OpenRouter gemma-4-26b-a4b-it:free
@@ -102,12 +102,12 @@ const TASK_MODELS: Record<AITask, [ModelConfig, ModelConfig, ModelConfig]> = {
     { provider: "openai", model: "gpt-5.4-nano" },
   ],
   agent: [
-    // Tier 1: GLM 4.7 Flash — fast, multilingual, 131k ctx
-    { provider: "workers-ai", model: "@cf/zai-org/glm-4.7-flash" },
-    // Tier 2: OpenRouter free model
+    // Tier 1: Llama 3.1 8B — fast, reliable, widely available
+    { provider: "workers-ai", model: "@cf/meta/llama-3.1-8b-instruct" },
+    // Tier 2: Mistral 7B — good quality fallback
+    { provider: "workers-ai", model: "@cf/mistral/mistral-7b-instruct-v0.2" },
+    // Tier 3: OpenRouter free model
     { provider: "openrouter", model: "google/gemma-3-27b-it:free" },
-    // Tier 3: OpenAI gpt-5.4-nano (flex tier, reasoningEffort=low)
-    { provider: "openai", model: "gpt-5.4-nano" },
   ],
 };
 

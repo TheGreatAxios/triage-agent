@@ -97,9 +97,13 @@ export async function triageMessage(
       raw: text.slice(0, 200),
     });
   } catch (err) {
+    const errorMsg = getErrorMessage(err);
+    const stack = err instanceof Error ? err.stack : undefined;
     logger.error("Triage LLM call failed", {
       messageId: event.messageId,
-      error: getErrorMessage(err),
+      error: errorMsg,
+      stack,
+      modelTier: "see fallback chain in ai.ts",
     });
   }
 
