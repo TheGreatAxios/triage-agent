@@ -6,6 +6,7 @@ import { getTracedModel } from "./ai";
 import { logger } from "./logger";
 import { getErrorMessage } from "./errors";
 import { sanitizePromptInput, sanitizeContextInput } from "./sanitize";
+import { withTimeout } from "./timeout";
 
 /**
  * Unified triage prompt: classify + draft + action in a single LLM call.
@@ -61,18 +62,24 @@ export async function triageMessage(
     const sanitizedContext = sanitizeContextInput(context);
     const sanitizedText = sanitizePromptInput(event.text);
 
-    const { text } = await generateText({
-      model,
-      system: TRIAGE_PROMPT,
-      prompt: `Context:\n${sanitizedContext}\n\nMessage to triage:\n${sanitizedText}`,
-      maxOutputTokens: 4000,
-      providerOptions: {
-        openai: {
-          reasoningEffort: "none",
-          serviceTier: "flex",
+    // Timeout LLM call at 12s to stay well within waitUntil limits
+    // (Leaves headroom for DB ops + escalation within 30s total)
+    const { text } = await withTimeout(
+      generateText({
+        model,
+        system: TRIAGE_PROMPT,
+        prompt: `Context:\n${sanitizedContext}\n\nMessage to triage:\n${sanitizedText}`,
+        maxOutputTokens: 500, // Reduced from 4000 - triage JSON is small (~150 tokens)
+        providerOptions: {
+          openai: {
+            reasoningEffort: "none",
+            serviceTier: "flex",
+          },
         },
-      },
-    });
+      }),
+      12000,
+      "llm_triage",
+    );
 
     const parsed = parseTriageResponse(text);
     if (parsed) {

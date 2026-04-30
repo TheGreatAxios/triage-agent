@@ -3,6 +3,7 @@ import type { EscalationStatus } from "../types/escalation";
 import { logger } from "./logger";
 import { getFormattedMessagesForEscalation } from "./queries";
 import { APIError, DatabaseError, getErrorMessage } from "./errors";
+import { withTimeout } from "./timeout";
 
 export interface EscalationContext {
   chatId: number;
@@ -150,11 +151,15 @@ async function sendSlackNotification(
   payload: Record<string, unknown>
 ): Promise<boolean> {
   try {
-    const resp = await fetch(webhookUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
+    const resp = await withTimeout(
+      fetch(webhookUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      }),
+      8000, // 8s timeout for Slack webhook
+      "slack_webhook",
+    );
 
     if (!resp.ok) {
       const body = await resp.text();
