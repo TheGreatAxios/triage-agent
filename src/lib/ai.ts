@@ -132,7 +132,7 @@ export function getModel(env: Env, task: AITask): LanguageModel {
         }
       }
 
-      logger.debug("AI model selected", {
+      logger.info("AI model selected", {
         task,
         tier,
         provider: config.provider,
@@ -141,10 +141,13 @@ export function getModel(env: Env, task: AITask): LanguageModel {
 
       return resolveModel(env, config);
     } catch (err) {
+      const errorDetails = err instanceof Error ? JSON.stringify(err, Object.getOwnPropertyNames(err)) : String(err);
       logger.warn(`Tier ${tier} failed, trying next`, {
         task,
         provider: config.provider,
+        model: config.model,
         error: getErrorMessage(err),
+        errorDetails: errorDetails.slice(0, 1000),
       });
     }
   }

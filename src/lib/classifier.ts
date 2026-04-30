@@ -56,11 +56,11 @@ export async function triageMessage(
   event: InternalEvent,
   context: string,
 ): Promise<TriageResult> {
+  const sanitizedContext = sanitizeContextInput(context);
+  const sanitizedText = sanitizePromptInput(event.text);
+
   try {
     const model = getTracedModel(env, "triage");
-
-    const sanitizedContext = sanitizeContextInput(context);
-    const sanitizedText = sanitizePromptInput(event.text);
 
     // Timeout LLM call at 12s to stay well within waitUntil limits
     // (Leaves headroom for DB ops + escalation within 30s total)
@@ -99,11 +99,15 @@ export async function triageMessage(
   } catch (err) {
     const errorMsg = getErrorMessage(err);
     const stack = err instanceof Error ? err.stack : undefined;
+    // Log full error details for debugging
+    const fullError = err instanceof Error ? JSON.stringify(err, Object.getOwnPropertyNames(err)) : String(err);
     logger.error("Triage LLM call failed", {
       messageId: event.messageId,
       error: errorMsg,
+      errorDetails: fullError.slice(0, 2000), // Truncate if too large
       stack,
-      modelTier: "see fallback chain in ai.ts",
+      context: sanitizedContext.slice(0, 200),
+      text: sanitizedText.slice(0, 200),
     });
   }
 
