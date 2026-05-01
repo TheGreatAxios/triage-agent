@@ -15,6 +15,7 @@ import {
   getTeamMemberByUsername,
 } from "../lib/team";
 import { processTriageMessage } from "./triage";
+import { sendErrorAlert } from "../lib/escalation";
 
 /**
  * Ingest a Telegram update: validate → normalize → persist → state update → triage.
@@ -143,6 +144,23 @@ export async function ingestUpdate(
     logger.error("AI binding not available — skipping triage", {
       update_id: update.update_id,
       chatId: dbChatId,
+    });
+    // Escalate so the user knows AI triage is silently failing
+    sendErrorAlert(
+      env.DB,
+      env.SLACK_WEBHOOK_URL,
+      {
+        chatId: dbChatId,
+        errorType: "ConfigError",
+        errorMessage: "AI binding not available — skipping triage. Messages will be persisted but not AI-classified.",
+        messageText: event.text,
+        sender: event.sender.username || event.sender.name,
+      },
+    ).catch((escalateErr) => {
+      logger.error("Failed to escalate AI binding error to Slack", {
+        chatId: dbChatId,
+        error: getErrorMessage(escalateErr),
+      });
     });
     return;
   }

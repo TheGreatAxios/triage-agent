@@ -184,7 +184,7 @@ async function getLatestClassification(
     return null;
   }
 
-  const validMethods = ["rule", "model"];
+  const validMethods = ["rule", "model", "fallback"];
   if (!validMethods.includes(row.method)) {
     logger.warn("Invalid classification method in database", { method: row.method, chatId });
     return null;

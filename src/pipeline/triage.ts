@@ -8,6 +8,7 @@ import { logger } from "../lib/logger";
 import { getErrorMessage } from "../lib/errors";
 import { getOrRefreshSummary } from "../lib/summary";
 import { getRecentMessagesWithSenders, buildMessageContext } from "../lib/queries";
+import { sendErrorAlert } from "../lib/escalation";
 
 /** Internal message passed from ingest to triage. */
 interface TriageMessage {
@@ -93,6 +94,30 @@ export async function processTriageMessage(
       stages: stageTimes,
       error: getErrorMessage(err),
     });
+
+    // Escalate the error to Slack with full context
+    const errorContext = (err as Record<string, unknown>).context as Record<string, unknown> | undefined;
+    await sendErrorAlert(
+      env.DB,
+      env.SLACK_WEBHOOK_URL,
+      {
+        chatId: msg.dbChatId,
+        errorType: err instanceof Error ? err.constructor.name : typeof err,
+        errorMessage: getErrorMessage(err),
+        messageText: msg.text,
+        sender: msg.sender.username || msg.sender.name,
+        rawPrefix: (errorContext?.rawPrefix as string) ?? undefined,
+        rawSuffix: (errorContext?.rawSuffix as string) ?? undefined,
+        rawLength: (errorContext?.rawLength as number) ?? undefined,
+        stack: err instanceof Error ? err.stack : undefined,
+      },
+    ).catch((escalateErr) => {
+      logger.error("Failed to escalate triage error to Slack", {
+        update_id: msg.updateId,
+        error: getErrorMessage(escalateErr),
+      });
+    });
+
     throw err;
   }
 }

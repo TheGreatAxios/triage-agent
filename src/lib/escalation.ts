@@ -16,6 +16,20 @@ export interface EscalationContext {
   responseConfidence?: number; // NEW: AI self-assessment for dual-confidence policy
 }
 
+export interface ErrorAlertContext {
+  chatId: number;
+  chatTitle?: string | null;
+  errorType: string;
+  errorMessage: string;
+  messageText?: string;
+  sender?: string;
+  draftContent?: string;
+  rawPrefix?: string;
+  rawSuffix?: string;
+  rawLength?: number;
+  stack?: string;
+}
+
 export interface EscalationResult {
   escalationId: number;
   slackMessageTs: string | null;
@@ -75,42 +89,65 @@ function buildSlackPayload(ctx: EscalationContext): Record<string, unknown> {
     ? `${(ctx.responseConfidence * 100).toFixed(0)}%`
     : "N/A";
 
-  const blocks: Record<string, unknown>[] = [
-    {
+  const isFallback = ctx.classification.method === "fallback";
+
+  const blocks: Record<string, unknown>[] = [];
+
+  // For LLM fallback/error cases, surface the error prominently
+  if (isFallback) {
+    blocks.push({
+      type: "header",
+      text: {
+        type: "plain_text",
+        text: "🚨 LLM ERROR — AI Triage Failed",
+        emoji: true,
+      },
+    });
+    blocks.push({
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: `⚠️ *The AI triage model failed or returned an unparseable response for this message.*\nEscalating as fallback — the message needs manual review.\nReason: ${ctx.reason}`,
+      },
+    });
+  } else {
+    blocks.push({
       type: "header",
       text: {
         type: "plain_text",
         text: "🚨 Telegram Escalation",
         emoji: true,
       },
-    },
-    {
-      type: "section",
-      fields: [
-        {
-          type: "mrkdwn",
-          text: `*Chat:*\n${chatLabel}`,
-        },
-        {
-          type: "mrkdwn",
-          text: `*Classification:*\n${ctx.classification.label} (${confidencePercent}% confidence)`,
-        },
-      ],
-    },
-    {
-      type: "section",
-      fields: [
-        {
-          type: "mrkdwn",
-          text: `*Response Quality:*\n${responseConfPercent}`,
-        },
-        {
-          type: "mrkdwn",
-          text: `*Reason:*\n${ctx.reason}`,
-        },
-      ],
-    },
-  ];
+    });
+  }
+
+  blocks.push({
+    type: "section",
+    fields: [
+      {
+        type: "mrkdwn",
+        text: `*Chat:*\n${chatLabel}`,
+      },
+      {
+        type: "mrkdwn",
+        text: `*Classification:*\n${ctx.classification.label} (${confidencePercent}% confidence)`,
+      },
+    ],
+  });
+
+  blocks.push({
+    type: "section",
+    fields: [
+      {
+        type: "mrkdwn",
+        text: `*Response Quality:*\n${responseConfPercent}`,
+      },
+      {
+        type: "mrkdwn",
+        text: `*Reason:*\n${ctx.reason}`,
+      },
+    ],
+  });
 
   if (ctx.recentMessages.length > 0) {
     const messagePreview = ctx.recentMessages.slice(-5).join("\n");
@@ -299,4 +336,97 @@ export async function getTelegramChatId(
     .first<{ telegram_chat_id: number }>();
 
   return row?.telegram_chat_id ?? null;
+}
+
+/**
+ * Send a generic error alert to Slack via webhook.
+ * Used for pipeline failures that can't go through the normal classification flow.
+ */
+export async function sendErrorAlert(
+  db: D1Database,
+  slackWebhookUrl: string,
+  ctx: ErrorAlertContext,
+): Promise<void> {
+  if (!slackWebhookUrl) return;
+
+  const chatTitle = ctx.chatTitle ?? await getChatTitle(db, ctx.chatId);
+  const senderLabel = ctx.sender ?? "unknown";
+  const draftInfo = ctx.draftContent
+    ? `\n*Draft:*\n> ${ctx.draftContent.slice(0, 1000)}`
+    : "";
+
+  const blocks: Record<string, unknown>[] = [
+    {
+      type: "header",
+      text: {
+        type: "plain_text",
+        text: "🚨 LLM ERROR — Triage Pipeline Failed",
+        emoji: true,
+      },
+    },
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: `*Error:*\n\`${ctx.errorType}: ${ctx.errorMessage}\``,
+      },
+    },
+    {
+      type: "section",
+      fields: [
+        {
+          type: "mrkdwn",
+          text: `*Chat:*\n${chatTitle ?? `Chat ${ctx.chatId}`}`,
+        },
+        {
+          type: "mrkdwn",
+          text: `*Sender:*\n${senderLabel}`,
+        },
+      ],
+    },
+  ];
+
+  if (ctx.messageText) {
+    blocks.push({
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: `*Message:*\n${ctx.messageText.slice(0, 1000)}${draftInfo}`,
+      },
+    });
+  }
+
+  // Include raw LLM response for parse failures
+  if (ctx.rawLength) {
+    blocks.push({
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: `*Raw response (${ctx.rawLength} chars):*\n> \`\`\`${(ctx.rawPrefix ?? "").slice(0, 300)}\`\`\``
+          + (ctx.rawSuffix ? `\n> ... *[truncated]* ...\n> \`\`\`${ctx.rawSuffix.slice(0, 200)}\`\`\`` : ""),
+      },
+    });
+  }
+
+  if (ctx.stack) {
+    blocks.push({
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: `*Stack:*\n\`\`\`${ctx.stack.slice(0, 1500)}\`\`\``,
+      },
+    });
+  }
+
+  blocks.push({
+    type: "context",
+    elements: [
+      {
+        type: "mrkdwn",
+        text: `chatId: ${ctx.chatId}`,
+      },
+    ],
+  });
+
+  await sendSlackNotification(slackWebhookUrl, { blocks });
 }

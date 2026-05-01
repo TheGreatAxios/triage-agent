@@ -4,6 +4,7 @@ import type { DraftStatus } from "../types/draft";
 import { persistDraft, markDraftSent, sendTelegramMessage } from "../lib/drafter";
 import {
   escalateToSlack,
+  sendErrorAlert,
   getRecentMessagesForEscalation,
   getChatTitle,
   getTelegramChatId,
@@ -46,6 +47,23 @@ export async function handleTriageResult(
       const telegramChatId = await getTelegramChatId(env.DB, chatId);
       if (!telegramChatId) {
         logger.error("Cannot auto-send: Telegram chat ID not found", { chatId });
+        sendErrorAlert(
+          env.DB,
+          env.SLACK_WEBHOOK_URL,
+          {
+            chatId,
+            errorType: "NotFoundError",
+            errorMessage: "Cannot auto-send: Telegram chat ID not found for this internal chat. The draft was never sent.",
+            messageText: triage.reasoning,
+            sender: "system",
+            draftContent: draftContent,
+          },
+        ).catch((escalateErr) => {
+          logger.error("Failed to escalate auto-send failure to Slack", {
+            chatId,
+            error: getErrorMessage(escalateErr),
+          });
+        });
         break;
       }
 
