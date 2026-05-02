@@ -56,31 +56,32 @@ export interface ModelConfig {
  * Multi-tier fallback strategy — Cloudflare Workers AI primary:
  *
  * TIER 1 (Primary — Cloudflare Workers AI):
- * - triage:   Llama 3.1 8B Instruct (fast, reliable, widely available)
- * - classify: Llama 3.1 8B Instruct (fast, reliable, widely available)
- * - draft:    Llama 3.1 8B Instruct (fast, reliable, widely available)
+ * - triage:   Llama 3.1 8B fp8-fast (FP8 quantized = half memory, 6× cheaper, faster cold load)
+ * - classify: Llama 3.1 8B fp8-fast
+ * - draft:    Llama 3.1 8B Instruct
  * - summarize: OpenRouter free model
- * - agent:    Llama 3.1 8B Instruct (fast, reliable, widely available)
+ * - agent:    Llama 3.1 8B Instruct
  *
  * TIER 2 (Fallback — Workers AI):
- * - All tasks: Mistral 7B Instruct v0.2
+ * - triage/classify: Mistral 7B v0.2
+ * - others: Mistral 7B Instruct v0.2
  *
  * TIER 3 (Emergency — OpenRouter):
  * - All tasks: google/gemma-3-27b-it:free (requires OPENROUTER_API_KEY)
  */
 const TASK_MODELS: Record<AITask, [ModelConfig, ModelConfig, ModelConfig]> = {
   triage: [
-    // Tier 1: Llama 3.1 8B — fast, reliable, widely available
-    { provider: "workers-ai", model: "@cf/meta/llama-3.1-8b-instruct" },
-    // Tier 2: Mistral 7B — good quality fallback
+    // Tier 1: Llama 3.1 8B fp8-fast — FP8 quantized = half memory, 6× cheaper, faster cold load
+    { provider: "workers-ai", model: "@cf/meta/llama-3.1-8b-instruct-fp8-fast" },
+    // Tier 2: Mistral 7B — good fallback
     { provider: "workers-ai", model: "@cf/mistral/mistral-7b-instruct-v0.2" },
     // Tier 3: OpenRouter free model
     { provider: "openrouter", model: "google/gemma-3-27b-it:free" },
   ],
   classify: [
-    // Tier 1: Llama 3.1 8B — fast, reliable, widely available
-    { provider: "workers-ai", model: "@cf/meta/llama-3.1-8b-instruct" },
-    // Tier 2: Mistral 7B — good quality fallback
+    // Tier 1: Llama 3.1 8B fp8-fast — FP8 quantized = half memory, 6× cheaper, faster cold load
+    { provider: "workers-ai", model: "@cf/meta/llama-3.1-8b-instruct-fp8-fast" },
+    // Tier 2: Mistral 7B — good fallback
     { provider: "workers-ai", model: "@cf/mistral/mistral-7b-instruct-v0.2" },
     // Tier 3: OpenRouter free model
     { provider: "openrouter", model: "google/gemma-3-27b-it:free" },

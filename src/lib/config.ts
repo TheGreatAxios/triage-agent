@@ -11,8 +11,8 @@ export interface AppConfig {
 
 export const defaultConfig: AppConfig = {
   noResponseDelaySeconds: 60,
-  maxHotMessages: 200,
-  summaryMaxAgeMinutes: 30,
+  maxHotMessages: 50,
+  summaryMaxAgeMinutes: 5,
 };
 
 export function getConfig(): AppConfig {

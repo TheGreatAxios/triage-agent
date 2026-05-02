@@ -40,7 +40,7 @@ TASK: Read the message in context → classify → decide action → draft a res
 - Hex strings (0x...) are wallet addresses or tx IDs, NOT error codes unless the user explicitly reports an error.
 - If unsure about anything, escalate. Never guess.
 
-Respond in JSON only:
+## CRITICAL: Output ONLY valid JSON. No preamble, no postamble, no markdown code blocks. No commentary before or after.
 {"label":"bug|request|normal|unknown","confidence":0.0-1.0,"action":"auto_send|escalate|defer","draft":"response text with markdown or null","draftConfidence":0.0-1.0 or null,"reasoning":"brief"}`;
 
 /**
@@ -58,8 +58,8 @@ export async function triageMessage(
 
   const model = getTracedModel(env, "triage");
 
-  // Timeout LLM call at 12s to stay well within waitUntil limits
-  // (Leaves headroom for DB ops + escalation within 30s total)
+  // Timeout LLM call at 25s — Workers AI cold starts can take 10-15s.
+  // Leaves ~5s headroom for DB ops + Slack within 30s waitUntil limit.
   let responseText: string;
   try {
     const { text } = await withTimeout(
@@ -67,15 +67,9 @@ export async function triageMessage(
         model,
         system: TRIAGE_PROMPT,
         prompt: `Context:\n${sanitizedContext}\n\nMessage to triage:\n${sanitizedText}`,
-        maxOutputTokens: 1000,
-        providerOptions: {
-          openai: {
-            reasoningEffort: "none",
-            serviceTier: "flex",
-          },
-        },
+        maxOutputTokens: 500,
       }),
-      12000,
+      25000,
       "llm_triage",
     );
     responseText = text;
