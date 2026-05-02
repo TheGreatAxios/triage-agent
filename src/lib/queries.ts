@@ -105,14 +105,30 @@ export async function getMessagesForArchival(
 }
 
 /**
- * Get recent messages formatted for escalation context.
- * 
- * Returns formatted strings like "[Name]: message text" for Slack notifications.
- * 
- * @param db - D1 database instance
- * @param chatId - Internal chat ID
- * @param limit - Maximum messages to include
- * @returns Array of formatted message strings
+ * Format a relative time string (e.g. "2m ago", "1h ago") from an ISO timestamp.
+ */
+function formatRelativeTime(isoTimestamp: string, now: Date): string {
+  const then = new Date(isoTimestamp + "Z");
+  const diffMs = now.getTime() - then.getTime();
+
+  if (isNaN(diffMs) || diffMs < 0) return "just now";
+
+  const seconds = Math.floor(diffMs / 1000);
+  if (seconds < 60) return `${seconds}s ago`;
+
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
+/**
+ * Get formatted messages for Slack escalation blocks.
+ * Returns messages in chronological order with sender names.
  */
 export async function getFormattedMessagesForEscalation(
   db: D1Database,
@@ -131,10 +147,23 @@ export async function getFormattedMessagesForEscalation(
 
 /**
  * Build a formatted context string from messages for AI prompts.
+ * 
+ * Each message includes a relative timestamp so the LLM can distinguish
+ * separate conversation threads based on time gaps and topic shifts.
  *
- * @param messages - Array of messages with sender info
+ * @param messages - Array of messages with sender info (chronological order)
  * @returns Formatted string for prompt context
  */
 export function buildMessageContext(messages: MessageWithSender[]): string {
-  return messages.map((m) => `[${m.display_name}]: ${m.text ?? ""}`).join("\n");
+  if (messages.length === 0) return "(no recent messages)";
+
+  const now = new Date();
+
+  return messages
+    .map((m) => {
+      const timeAgo = formatRelativeTime(m.created_at, now);
+      const text = m.text ?? "";
+      return `[${m.display_name} (${timeAgo})]: ${text}`;
+    })
+    .join("\n");
 }
