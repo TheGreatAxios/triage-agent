@@ -1,3 +1,7 @@
+# Community Branding (used in AI prompts — set these for your project)
+COMMUNITY_NAME=Community Name
+DOCS_URL=docs.example.com
+
 # Required Telegram Settings
 TELEGRAM_BOT_TOKEN=your-bot-token
 TELEGRAM_WEBHOOK_SECRET=your-webhook-secret

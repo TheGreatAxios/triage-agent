@@ -33,6 +33,10 @@ export interface Env {
   // Bot Configuration
   NOTIFY_ON_APPROVAL?: string;          // "true" to send activation message (default: silent)
 
+  // Branding & Community (used in AI prompts — set for your community)
+  COMMUNITY_NAME: string;              // e.g. "SKALE Network" — used in system prompts
+  DOCS_URL: string;                    // e.g. "docs.skale.space" — used in draft examples
+
   // AI Providers (all optional - only set what you use)
   // Official SDK Providers
   ANTHROPIC_API_KEY?: string;      // Claude models

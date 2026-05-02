@@ -14,13 +14,20 @@ export async function persistDraft(
   responseConfidence: number,
   status: DraftStatus,
   toolsUsed?: string[],
-  toolResults?: Array<{ tool: string; summary: string }>
+  toolResults?: Array<{ tool: string; summary: string }>,
+  options?: {
+    classificationLabel?: string;
+    classificationConfidence?: number;
+    reasoning?: string;
+    method?: string;
+  },
 ): Promise<number> {
   try {
     await db
       .prepare(
-        `INSERT INTO drafts (chat_id, content, confidence, response_confidence, status, tools_used, tool_results)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO drafts (chat_id, content, confidence, response_confidence, status, tools_used, tool_results,
+          classification_label, classification_confidence, reasoning, method)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         chatId,
@@ -29,7 +36,11 @@ export async function persistDraft(
         responseConfidence,
         status,
         toolsUsed ? JSON.stringify(toolsUsed) : null,
-        toolResults ? JSON.stringify(toolResults) : null
+        toolResults ? JSON.stringify(toolResults) : null,
+        options?.classificationLabel ?? null,
+        options?.classificationConfidence ?? null,
+        options?.reasoning ?? null,
+        options?.method ?? null,
       )
       .run();
 
