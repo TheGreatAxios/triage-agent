@@ -1,12 +1,29 @@
-import { generateText } from "ai";
+import { generateObject } from "ai";
+import { z } from "zod";
 import type { InternalEvent } from "../types/events";
 import type { ClassificationLabel, TriageResult } from "../types/classification";
 import type { Env } from "../types/env";
 import { getTracedModel } from "./ai";
 import { logger } from "./logger";
-import { AIError, ValidationError, getErrorMessage } from "./errors";
+import { AIError, getErrorMessage } from "./errors";
 import { sanitizePromptInput, sanitizeContextInput } from "./sanitize";
 import { withTimeout } from "./timeout";
+
+/**
+ * Zod schema for structured triage output.
+ * Used with generateText + output for reliable JSON at the API level.
+ */
+const triageSchema = z.object({
+  label: z.enum(["bug", "request", "normal", "unknown"]),
+  confidence: z.number().min(0).max(1),
+  action: z.enum(["auto_send", "escalate", "defer"]),
+  draft: z.string().nullable(),
+  draftConfidence: z.number().min(0).max(1).nullable(),
+  reasoning: z.string(),
+});
+
+/** Inferred type from the triage schema. */
+type TriageSchema = z.infer<typeof triageSchema>;
 
 /**
  * Unified triage prompt: classify + draft + action in a single LLM call.
@@ -38,13 +55,14 @@ TASK: Read the message in context → classify → decide action → draft a res
 
 ## Important
 - Hex strings (0x...) are wallet addresses or tx IDs, NOT error codes unless the user explicitly reports an error.
-- If unsure about anything, escalate. Never guess.
-
-## CRITICAL: Output ONLY valid JSON. No preamble, no postamble, no markdown code blocks. No commentary before or after.
-{"label":"bug|request|normal|unknown","confidence":0.0-1.0,"action":"auto_send|escalate|defer","draft":"response text with markdown or null","draftConfidence":0.0-1.0 or null,"reasoning":"brief"}`;
+- If unsure about anything, escalate. Never guess.`;
 
 /**
  * Single-call triage: classify a message, decide action, generate draft.
+ *
+ * Uses generateObject (generateText + output: object()) with a Zod schema
+ * for reliable structured output. Workers AI's JSON mode forces the model
+ * to produce valid JSON matching the schema — no parse failures.
  *
  * Returns TriageResult with everything needed to act.
  */
@@ -60,19 +78,21 @@ export async function triageMessage(
 
   // Timeout LLM call at 25s — Workers AI cold starts can take 10-15s.
   // Leaves ~5s headroom for DB ops + Slack within 30s waitUntil limit.
-  let responseText: string;
+  let parsed: TriageSchema;
   try {
-    const { text } = await withTimeout(
-      generateText({
+    const result = await withTimeout(
+      generateObject({
         model,
+        schema: triageSchema,
+        schemaName: "triage",
+        schemaDescription: "Classify the message, decide an action, and draft a response",
         system: TRIAGE_PROMPT,
         prompt: `Context:\n${sanitizedContext}\n\nMessage to triage:\n${sanitizedText}`,
-        maxOutputTokens: 500,
       }),
       25000,
       "llm_triage",
     );
-    responseText = text;
+    parsed = result.object;
   } catch (err) {
     const errorMsg = getErrorMessage(err);
     const details = err instanceof Error ? JSON.stringify(err, Object.getOwnPropertyNames(err)) : String(err);
@@ -98,207 +118,29 @@ export async function triageMessage(
     );
   }
 
-  const parsed = parseTriageResponse(responseText);
-  if (parsed) {
-    logger.debug("Triage result", {
-      messageId: event.messageId,
-      label: parsed.label,
-      confidence: parsed.confidence,
-      action: parsed.action,
-    });
-    return parsed;
-  }
-
-  // Parse failure — LLM returned something we couldn't interpret
-  // Log enough context to diagnose the issue
-  logger.error("Failed to parse triage response", {
+  logger.debug("Triage result", {
     messageId: event.messageId,
-    rawLength: responseText.length,
-    rawPrefix: responseText.slice(0, 300),
-    rawSuffix: responseText.slice(-200),
-    context: sanitizedContext.slice(0, 200),
-    text: sanitizedText.slice(0, 200),
+    label: parsed.label,
+    confidence: parsed.confidence,
+    action: parsed.action,
   });
-  throw new ValidationError(
-    "triage_response",
-    responseText.slice(0, 500),
-    {
-      messageId: event.messageId,
-      chatId: event.chatId,
-      rawLength: responseText.length,
-      rawPrefix: responseText.slice(0, 500),
-      rawSuffix: responseText.slice(-500),
-      context: sanitizedContext.slice(0, 500),
-      text: sanitizedText.slice(0, 500),
-    },
-  );
+
+  return buildTriageResult(parsed);
 }
 
 /**
- * Parse the LLM's JSON triage response.
- *
- * Uses multiple strategies in order of robustness:
- * 1. Direct JSON.parse on raw text (pure JSON response)
- * 2. Extract from markdown code blocks (```json ... ```)
- * 3. Brace-counting extraction (handles `}` inside string values)
- * 4. Truncated JSON recovery (last resort for cut-off output)
+ * Build a TriageResult from a validated schema object.
  */
-function parseTriageResponse(text: string): TriageResult | null {
-  // Strategy 1: Try parsing the full text as JSON directly
-  // Handles pure JSON responses with no preamble/postamble
-  try {
-    const parsed = JSON.parse(text.trim()) as Record<string, unknown>;
-    if (isValidTriageResponse(parsed)) {
-      return buildTriageResult(parsed);
-    }
-  } catch {
-    // Not valid JSON, continue to next strategy
-  }
-
-  // Strategy 2: Extract JSON from markdown code blocks
-  // Handles responses wrapped in ```json ... ```
-  const codeBlockMatch = text.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
-  if (codeBlockMatch) {
-    const inner = codeBlockMatch[1].trim();
-    try {
-      const parsed = JSON.parse(inner) as Record<string, unknown>;
-      if (isValidTriageResponse(parsed)) {
-        return buildTriageResult(parsed);
-      }
-    } catch {
-      // Not valid JSON in code block
-    }
-  }
-
-  // Strategy 3: Find the outermost JSON object by counting braces
-  // Correctly handles `}` inside string values (e.g. draft text with code)
-  const firstBrace = text.indexOf("{");
-  if (firstBrace !== -1) {
-    let depth = 0;
-    let inString = false;
-    let escape = false;
-    let startIdx = -1;
-
-    for (let i = firstBrace; i < text.length; i++) {
-      const char = text[i];
-
-      if (escape) {
-        escape = false;
-        continue;
-      }
-
-      if (char === "\\" && inString) {
-        escape = true;
-        continue;
-      }
-
-      if (char === '"') {
-        inString = !inString;
-        continue;
-      }
-
-      if (!inString) {
-        if (char === "{") {
-          if (depth === 0) startIdx = i;
-          depth++;
-        } else if (char === "}") {
-          depth--;
-          if (depth === 0 && startIdx !== -1) {
-            // Found a complete JSON object — try to parse it
-            const candidate = text.slice(startIdx, i + 1);
-            try {
-              const parsed = JSON.parse(candidate) as Record<string, unknown>;
-              if (isValidTriageResponse(parsed)) {
-                return buildTriageResult(parsed);
-              }
-            } catch {
-              // Valid framing but JSON invalid — continue scanning
-            }
-          }
-        }
-      }
-    }
-  }
-
-  // Strategy 4: Truncated JSON recovery (last resort)
-  // Only reached if the output was cut off mid-response
-  try {
-    const openIdx = text.indexOf("{");
-    if (openIdx === -1) return null;
-
-    let candidate = text.slice(openIdx);
-
-    // Remove trailing incomplete key-value pair
-    candidate = candidate.replace(/,\s*"[^"]*"?\s*:\s*[^,}]*$/, "");
-
-    // Close open strings (count unescaped quotes)
-    let inStr = false;
-    let escaped = false;
-    for (const c of candidate) {
-      if (escaped) { escaped = false; continue; }
-      if (c === "\\") { escaped = true; continue; }
-      if (c === '"' && !escaped) inStr = !inStr;
-    }
-    if (inStr) candidate += '"';
-
-    // Close object
-    if (!candidate.endsWith("}")) candidate += "}";
-
-    const parsed = JSON.parse(candidate) as Record<string, unknown>;
-    if (isValidTriageResponse(parsed)) {
-      return buildTriageResult(parsed);
-    }
-  } catch {
-    return null;
-  }
-
-  return null;
-}
-
-/**
- * Build a TriageResult from a validated parsed JSON object.
- */
-function buildTriageResult(parsed: Record<string, unknown>): TriageResult {
-  const label = parsed.label as ClassificationLabel;
-  const confidence = Math.max(0, Math.min(1, (parsed.confidence as number) ?? 0.5));
-
-  const validActions = ["auto_send", "escalate", "defer"];
-  let action = parsed.action as string;
-  if (!validActions.includes(action)) action = "escalate";
-
-  const draft = typeof parsed.draft === "string" && parsed.draft.length > 0
-    ? parsed.draft
-    : null;
-
-  const draftConfidence = draft !== null && typeof parsed.draftConfidence === "number"
-    ? Math.max(0, Math.min(1, parsed.draftConfidence))
-    : null;
+function buildTriageResult(parsed: TriageSchema): TriageResult {
+  const draft = parsed.draft && parsed.draft.length > 0 ? parsed.draft : null;
 
   return {
-    label,
-    confidence,
+    label: parsed.label as ClassificationLabel,
+    confidence: parsed.confidence,
     method: "model",
-    reasoning: (parsed.reasoning as string) ?? "Classified by triage model",
-    action: action as TriageResult["action"],
+    reasoning: parsed.reasoning ?? "Classified by triage model",
+    action: parsed.action as TriageResult["action"],
     draft,
-    draftConfidence,
+    draftConfidence: draft !== null ? parsed.draftConfidence : null,
   };
-}
-
-/**
- * Runtime type guard for triage response.
- */
-function isValidTriageResponse(obj: Record<string, unknown>): boolean {
-  const validLabels: ClassificationLabel[] = ["bug", "request", "normal", "unknown"];
-
-  if (typeof obj.label !== "string" || !validLabels.includes(obj.label as ClassificationLabel)) {
-    return false;
-  }
-  if (typeof obj.confidence !== "number") {
-    return false;
-  }
-  if (typeof obj.action !== "string") {
-    return false;
-  }
-  return true;
 }
