@@ -56,8 +56,8 @@ export interface ModelConfig {
  * Multi-tier fallback strategy — Cloudflare Workers AI primary:
  *
  * TIER 1 (Primary — Cloudflare Workers AI):
- * - triage:   Llama 3.1 8B fast (JSON mode required for generateObject)
- * - classify: Llama 3.1 8B fast (JSON mode required for generateObject)
+ * - triage:   Llama 3.1 8B Instruct (JSON mode required for generateObject)
+ * - classify: Llama 3.1 8B Instruct (JSON mode required for generateObject)
  * - draft:    Llama 3.1 8B Instruct
  * - summarize: OpenRouter free model
  * - agent:    Llama 3.1 8B Instruct
@@ -71,16 +71,16 @@ export interface ModelConfig {
  */
 const TASK_MODELS: Record<AITask, [ModelConfig, ModelConfig, ModelConfig]> = {
   triage: [
-    // Tier 1: Llama 3.1 8B fast (NOT fp8) — JSON mode required for generateObject
-    { provider: "workers-ai", model: "@cf/meta/llama-3.1-8b-instruct-fast" },
-    // Tier 2: Mistral 7B — good fallback
+    // Tier 1: Llama 3.1 8B Instruct (full, not fast) — more reliable JSON mode
+    { provider: "workers-ai", model: "@cf/meta/llama-3.1-8b-instruct" },
+    // Tier 2: Mistral 7B — good fallback for structured output
     { provider: "workers-ai", model: "@cf/mistral/mistral-7b-instruct-v0.2" },
     // Tier 3: OpenRouter free model
     { provider: "openrouter", model: "google/gemma-3-27b-it:free" },
   ],
   classify: [
-    // Tier 1: Llama 3.1 8B fast (NOT fp8) — JSON mode required for generateObject
-    { provider: "workers-ai", model: "@cf/meta/llama-3.1-8b-instruct-fast" },
+    // Tier 1: Llama 3.1 8B Instruct (full, not fast) — more reliable JSON mode
+    { provider: "workers-ai", model: "@cf/meta/llama-3.1-8b-instruct" },
     // Tier 2: Mistral 7B — good fallback
     { provider: "workers-ai", model: "@cf/mistral/mistral-7b-instruct-v0.2" },
     // Tier 3: OpenRouter free model

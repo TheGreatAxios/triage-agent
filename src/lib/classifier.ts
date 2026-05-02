@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { InternalEvent } from "../types/events";
 import type { ClassificationLabel, TriageResult } from "../types/classification";
 import type { Env } from "../types/env";
-import { getTracedModel } from "./ai";
+import { getTaskTiers, resolveModel } from "./ai";
 import { logger } from "./logger";
 import { AIError, getErrorMessage } from "./errors";
 import { sanitizePromptInput, sanitizeContextInput } from "./sanitize";
@@ -119,62 +119,89 @@ export async function triageMessage(
   const sanitizedContext = sanitizeContextInput(context);
   const sanitizedText = sanitizePromptInput(event.text);
 
-  const model = getTracedModel(env, "triage");
-
   const communityName = env.COMMUNITY_NAME || "this community";
   const docsUrl = env.DOCS_URL || "the docs";
   const systemPrompt = buildTriagePrompt(communityName, docsUrl);
 
-  // Timeout LLM call at 25s — Workers AI cold starts can take 10-15s.
-  // Leaves ~5s headroom for DB ops + Slack within 30s waitUntil limit.
-  let parsed: TriageSchema;
-  try {
-    const result = await withTimeout(
-      generateObject({
-        model,
-        schema: triageSchema,
-        schemaName: "triage",
-        schemaDescription: "Classify the message, decide an action, and draft a response",
-        system: systemPrompt,
-        prompt: `Context:\n${sanitizedContext}\n\nMessage to triage:\n${sanitizedText}`,
-      }),
-      25000,
-      "llm_triage",
-    );
-    parsed = result.object;
-  } catch (err) {
-    const errorMsg = getErrorMessage(err);
-    const details = err instanceof Error ? JSON.stringify(err, Object.getOwnPropertyNames(err)) : String(err);
-    logger.error("Triage LLM call failed", {
-      messageId: event.messageId,
-      error: errorMsg,
-      errorDetails: details.slice(0, 2000),
-      stack: err instanceof Error ? err.stack : undefined,
-      context: sanitizedContext.slice(0, 200),
-      text: sanitizedText.slice(0, 200),
-    });
-    throw new AIError(
-      `Triage LLM call failed: ${errorMsg}`,
-      "unknown",
-      "unknown",
-      "triage",
-      {
+  const tiers = getTaskTiers("triage");
+  let lastError: unknown;
+
+  // Try each tier with inference-time fallback.
+  // resolveModel is called per-tier so we actually advance the model
+  // on failure — no global state mutation needed.
+  for (let tierIdx = 0; tierIdx < tiers.length; tierIdx++) {
+    const config = tiers[tierIdx];
+    const tier = tierIdx + 1;
+    try {
+      const model = resolveModel(env, config);
+
+      logger.info("AI model selected", {
+        task: "triage",
+        tier,
+        provider: config.provider,
+        model: config.model,
+        retry: tierIdx > 0,
+      });
+
+      const result = await withTimeout(
+        generateObject({
+          model,
+          schema: triageSchema,
+          schemaName: "triage",
+          schemaDescription: "Classify the message, decide an action, and draft a response",
+          system: systemPrompt,
+          prompt: `Context:\n${sanitizedContext}\n\nMessage to triage:\n${sanitizedText}`,
+        }),
+        25000,
+        "llm_triage",
+      );
+
+      const parsed = result.object;
+
+      logger.debug("Triage result", {
         messageId: event.messageId,
-        chatId: event.chatId,
-        context: sanitizedContext.slice(0, 500),
-        text: sanitizedText.slice(0, 500),
-      },
-    );
+        tier,
+        label: parsed.label,
+        confidence: parsed.confidence,
+        action: parsed.action,
+      });
+
+      return buildTriageResult(parsed);
+    } catch (err) {
+      lastError = err;
+      logger.warn("Triage tier failed, trying next", {
+        messageId: event.messageId,
+        tier,
+        provider: config.provider,
+        model: config.model,
+        error: getErrorMessage(err),
+      });
+    }
   }
 
-  logger.debug("Triage result", {
+  // All tiers exhausted
+  const errorMsg = getErrorMessage(lastError);
+  const details = lastError instanceof Error ? JSON.stringify(lastError, Object.getOwnPropertyNames(lastError)) : String(lastError);
+  logger.error("Triage LLM call failed — all tiers exhausted", {
     messageId: event.messageId,
-    label: parsed.label,
-    confidence: parsed.confidence,
-    action: parsed.action,
+    error: errorMsg,
+    errorDetails: details.slice(0, 2000),
+    stack: lastError instanceof Error ? lastError.stack : undefined,
+    context: sanitizedContext.slice(0, 200),
+    text: sanitizedText.slice(0, 200),
   });
-
-  return buildTriageResult(parsed);
+  throw new AIError(
+    `Triage LLM call failed: ${errorMsg}`,
+    "unknown",
+    "unknown",
+    "triage",
+    {
+      messageId: event.messageId,
+      chatId: event.chatId,
+      context: sanitizedContext.slice(0, 500),
+      text: sanitizedText.slice(0, 500),
+    },
+  );
 }
 
 /**
