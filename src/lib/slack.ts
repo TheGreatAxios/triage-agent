@@ -628,19 +628,8 @@ export async function sendStaleAlert(
   alert: StaleChatAlert,
   webhookUrl: string
 ): Promise<SlackSendResult> {
-  // Idempotency check: Have we already sent this alert type for this chat?
-  const alertType = `stale_4h`;
-  const existingAlert = await db
-    .prepare(
-      `SELECT id FROM stale_alert_sent WHERE chat_id = ? AND alert_type = ?`
-    )
-    .bind(alert.chatId, alertType)
-    .first<{ id: number }>();
-
-  if (existingAlert) {
-    logger.info("Stale alert already sent - skipping duplicate", { chatId: alert.chatId });
-    return { success: true, messageTs: "duplicate_skipped" };
-  }
+  // NOTE: Idempotency is handled upstream by getStaleChats() (NOT EXISTS filter)
+  // and recordStaleAlert() in timer.ts. No duplicate check needed here.
 
   const waitingTime =
     alert.customerWaitingHours < 1
@@ -739,14 +728,6 @@ export async function sendStaleAlert(
       throw new Error(`Slack webhook error: ${response.status} ${error}`);
     }
 
-    // Record idempotency marker
-    await db
-      .prepare(
-        `INSERT INTO stale_alert_sent (chat_id, alert_type) VALUES (?, ?)`
-      )
-      .bind(alert.chatId, alertType)
-      .run();
-
     logger.info("Stale alert sent to Slack", { chatId: alert.chatId });
 
     return {
@@ -764,7 +745,7 @@ export async function sendStaleAlert(
 
 /**
  * Send daily summary to Slack via webhook with team member KPIs.
- * Includes idempotency check via daily_summary_sent table.
+ * Idempotency is handled upstream by checkDuplicateSummary() + recordSummarySent() in timer.ts.
  */
 export async function sendDailySummaryWebhook(
   db: D1Database,
@@ -772,19 +753,6 @@ export async function sendDailySummaryWebhook(
   period: "morning" | "evening",
   webhookUrl: string
 ): Promise<SlackSendResult> {
-  // Idempotency check: Have we already sent this summary?
-  const existingSummary = await db
-    .prepare(
-      `SELECT id FROM daily_summary_sent WHERE date = ? AND period = ?`
-    )
-    .bind(date, period)
-    .first<{ id: number }>();
-
-  if (existingSummary) {
-    logger.info("Daily summary already sent - skipping duplicate", { date, period });
-    return { success: true, messageTs: "duplicate_skipped" };
-  }
-
   // Fetch metrics from database
   const metrics = await fetchDailyMetrics(db, date, period);
 
@@ -889,14 +857,6 @@ export async function sendDailySummaryWebhook(
       const error = await response.text();
       throw new Error(`Slack webhook error: ${response.status} ${error}`);
     }
-
-    // Record idempotency marker
-    await db
-      .prepare(
-        `INSERT INTO daily_summary_sent (date, period, slack_channel) VALUES (?, ?, ?)`
-      )
-      .bind(date, period, "#triage-summaries")
-      .run();
 
     logger.info("Daily summary sent to Slack", { date, period });
 

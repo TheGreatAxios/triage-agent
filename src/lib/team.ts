@@ -106,19 +106,30 @@ export async function recordTeamTouch(
   timestamp: string
 ): Promise<void> {
   try {
-    // Upsert chat_metrics: update last_team_touch_at, increment total_team_touches
-    // Calculate first_response_seconds if this is the first response
+    // Step 1: Look up first_customer_message_at for response time calculation.
+    // We need this value BEFORE the upsert because SQLite/D1 doesn't allow
+    // referencing existing column values in VALUES() or binding them as params.
+    const metricsRow = await db
+      .prepare(`SELECT first_customer_message_at, first_response_seconds FROM chat_metrics WHERE chat_id = ?`)
+      .bind(chatId)
+      .first<{ first_customer_message_at: string | null; first_response_seconds: number | null }>();
+
+    // Calculate response time only if this is the first response and we have a customer message time
+    const firstCustomerMsgAt = metricsRow?.first_customer_message_at ?? null;
+    const existingResponseTime = metricsRow?.first_response_seconds ?? null;
+    const responseSeconds =
+      !existingResponseTime && firstCustomerMsgAt
+        ? Math.round((new Date(timestamp).getTime() - new Date(firstCustomerMsgAt).getTime()) / 1000)
+        : null;
+
+    // Step 2: Upsert chat_metrics with pre-calculated response time
     await db
       .prepare(
         `INSERT INTO chat_metrics (
           chat_id, last_team_touch_at, total_team_touches, team_member_ids,
           first_response_at, first_response_seconds, created_at, updated_at
         ) VALUES (
-          ?, ?, 1, ?, ?, 
-          CASE WHEN ? IS NOT NULL THEN 
-            ROUND((julianday(?) - julianday(?)) * 86400)
-          ELSE NULL END,
-          datetime('now'), datetime('now')
+          ?, ?, 1, ?, ?, ?, datetime('now'), datetime('now')
         )
         ON CONFLICT (chat_id) DO UPDATE SET
           last_team_touch_at = ?,
@@ -129,30 +140,21 @@ export async function recordTeamTouch(
             ELSE chat_metrics.team_member_ids || ',' || ?
           END,
           first_response_at = COALESCE(chat_metrics.first_response_at, ?),
-          first_response_seconds = COALESCE(
-            chat_metrics.first_response_seconds,
-            CASE WHEN ? IS NOT NULL THEN 
-              ROUND((julianday(?) - julianday(?)) * 86400)
-            ELSE NULL END
-          ),
+          first_response_seconds = COALESCE(chat_metrics.first_response_seconds, ?),
           updated_at = datetime('now')`
       )
       .bind(
         chatId,
         timestamp,
         String(teamMemberId),
-        timestamp, // first_response_at (initial)
-        null, // placeholder for first_customer_message_at subquery
-        timestamp,
-        null, // will be replaced with first_customer_message_at
-        timestamp,
+        timestamp,         // first_response_at (INSERT path)
+        responseSeconds,   // first_response_seconds (INSERT path)
+        timestamp,         // last_team_touch_at (UPDATE path)
         String(teamMemberId),
         String(teamMemberId),
         String(teamMemberId),
-        timestamp,
-        null, // placeholder
-        timestamp,
-        null // placeholder
+        timestamp,         // first_response_at (UPDATE path)
+        responseSeconds,   // first_response_seconds (UPDATE path)
       )
       .run();
 

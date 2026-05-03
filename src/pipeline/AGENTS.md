@@ -5,191 +5,153 @@ The pipeline processes messages from ingestion to response. All stages are sourc
 ## Files
 
 - `ingest.ts` — Full pipeline: normalize → persist → state → classify → respond
-- `respond.ts` — Draft generation → policy → auto_send/escalate/draft_only + Linear
-- `timer.ts` — Process fired timers via scheduled cron
+- `respond.ts` — Safety eval → draft persistence → auto_send/escalate/draft_only + Linear + Notion
+- `triage.ts` — Build context → LLM triage → persist classification → handle result
+- `timer.ts` — Process fired timers via scheduled cron + stale alerts + daily summaries
 
 ## Pipeline Flow
 
 ```
-Message received → normalize → persist → update state → classify → respond
-                                                                      ↓
-                                                            draft → policy eval
-                                                            ↓         ↓         ↓
-                                                       auto_send  escalate  draft_only
-                                                            ↓
-                                                      Slack webhook
-                                                  ↓ (if bug/request)
-                                                  Linear triage issue
+Message received → normalize → persist → approval gate → team check → update state → triage
+                                                                                          ↓
+                                                                            draft → safety eval → policy
+                                                                            ↓         ↓         ↓
+                                                                       auto_send  escalate  draft_only
+                                                                            ↓
+                                                                     Slack + Linear + Notion
 ```
 
-## Response Policy
+## Design Decisions
 
-The response policy determines how classified messages are handled. The system uses **dual-confidence evaluation** for sensitive classifications (bugs and feature requests).
+### Inline Triage (Not Timer-Based)
 
-### Policy Actions
+Workers AI calls complete in 1–3s, well within the 30s `waitUntil` limit. Triage runs inline in `ingestUpdate()` instead of scheduling a timer and waiting. Timers are only used for the legacy `no_response` path.
 
-| Action | Trigger | Behavior |
-|--------|---------|----------|
-| **auto_send** | Normal: confidence ≥ 0.85 AND label in `autoSendLabels` | Send draft immediately to Telegram |
-| **auto_send** | Bug/Request: classification > 0.8 AND response > 0.875 | Send draft immediately (dual-confidence) |
-| **escalate** | confidence < 0.4 OR label is "unknown" | Send to Slack for human review |
-| **draft_only** | All other cases | Save draft for later review |
+### Approval Gate
 
-### Dual-Confidence System (Bug/Request)
+Messages from unapproved chats are silently dropped in `ingest.ts`. The chat must have `approval_status = 'approved'` in the `chats` table. This prevents the bot from processing messages in random groups it was added to without admin approval.
 
-Sensitive classifications require **both** thresholds to auto-send:
+### Team Member Short-Circuit
 
-```
-Classification Confidence > 0.8  AND  Response Confidence > 0.875
-       │                                    │
-       ▼                                    ▼
-"We're sure it's a bug"          "We're sure our answer is correct"
-```
+If the sender is a detected team member (via `team_members` table), the pipeline:
+1. Records the team touch (for metrics)
+2. Cancels any pending timers
+3. Returns immediately — **no AI triage, no draft, no escalation**
 
-**Response Confidence Factors:**
-- 0.9-1.0: Exact solution, verified links, very confident
-- 0.8-0.9: Good approach, working links, minor uncertainty
-- 0.7-0.8: Reasonable but needs verification
-- <0.8: Don't auto-send, needs human review
+This prevents the bot from responding to its own team's messages.
 
-See `src/lib/config.ts` → `evaluateResponsePolicy()` for implementation.
+### Response Policy (Inline in `respond.ts`)
 
-### Common Tuning Scenarios
+The `evaluateSafety()` function enforces code-level thresholds AFTER the LLM decides. The LLM can suggest but the code enforces:
 
-**More aggressive auto-send:** Lower `autoSendThreshold` and expand `autoSendLabels` in config.
-**Draft-only mode:** Set `autoSendLabels: []`.
-**Lower escalation threshold:** Reduce `escalationThreshold` below 0.4.
+| Check | Threshold | Override Action |
+|-------|-----------|-----------------|
+| No draft content | N/A | Skip |
+| Content safety blocked | Score > 0.5 | Escalate |
+| Classification confidence | < 0.4 | Escalate |
+| Draft confidence | < 0.6 | Escalate |
+| Sensitive label (bug/request) draft confidence | < 0.8 | Escalate |
 
-### Adding New Classification Labels
+**Effective actions:** The LLM's action can be overridden by safety evaluation. For example, the LLM says `auto_send` but if draft confidence < 0.6, the code changes it to `escalate`.
 
-1. Update type in `src/types/classification.ts`
-2. Add rules in `src/lib/classifier.ts`
-3. Update model prompt in classifier
-4. Set policy for new label in `src/lib/config.ts`
+### Escalate Path
 
-### Monitoring Policy Performance
+When action is `escalate`:
+1. Persist draft with status `escalated`
+2. Send draft to Telegram user (if safety passed) — user gets immediate response
+3. Send Slack escalation with full context — human reviews
+4. If label is `bug` or `request`: create Linear issue + push to Notion
 
-```sql
--- Auto-send rate by day
-SELECT date(created_at) as day, COUNT(*) as total,
-  SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END) as auto_sent,
-  ROUND(100.0 * SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END) / COUNT(*), 2) as pct
-FROM drafts GROUP BY day ORDER BY day DESC;
-```
+### Idempotency Points
 
-### Rollback
+| Stage | Mechanism | Location |
+|-------|-----------|----------|
+| Webhook delivery | `ON CONFLICT DO NOTHING` on `(chat_id, telegram_message_id)` | `persistence.ts` |
+| Pipeline re-entry | Check `active_messages` for existing message before processing | `ingest.ts` |
+| Draft persist | Always inserts (allows multiple drafts per chat) | `drafter.ts` |
+| Slack escalation | Skip if escalation exists within 5 min for same chat | `escalation.ts` |
+| Timer processing | `processed_timers` table + `isTimerProcessed()` | `team.ts` |
+| Daily summary | `daily_summary_sent` table + `checkDuplicateSummary()` | `team.ts` |
+| Stale alerts | `stale_alert_sent` table + `NOT EXISTS` filter | `team.ts` |
 
-Policy changes are code changes — revert `src/lib/config.ts` and redeploy.
+### Error Escalation
 
-## Debugging the Pipeline
+When triage fails (all AI tiers exhausted, DB error, etc.):
+1. `sendErrorAlert()` sends a formatted error to Slack with stack trace
+2. Error is re-thrown to propagate to the top-level `waitUntil` handler
+3. Message is still persisted in D1 — no data loss
 
-### Quick Diagnostic Flow
+## File-Specific Notes
 
-```
-Message not processed?
-        │
-        ▼
-  1. Check logs (wrangler tail)
-        │
-   ┌────┴────┐
-   ▼         ▼
-Webhook   Pipeline
-received?   error?
-   │         │
-   ▼         ▼
-Verify    Check D1
-secret    tables
-```
+### `ingest.ts`
 
-### 1. Check Live Logs
+**Idempotency check:** Before persisting, queries `active_messages` joined with `chats` to check if the exact `(telegram_message_id, telegram_chat_id)` pair already exists. This prevents duplicate processing from Telegram webhook redeliveries.
+
+**AI binding guard:** If `env.AI` is not available, logs error and escalates to Slack. Messages are persisted but not triaged.
+
+### `triage.ts`
+
+**Context building:** Fetches up to 10 recent messages with sender names, plus the latest summary if not stale. Context is built via `buildMessageContext()` which includes relative timestamps.
+
+**Error handling:** All 3 AI tiers must fail before the error is thrown. Each tier failure is logged with provider/model details.
+
+### `respond.ts`
+
+**Dual Notion push:** Both triage items and summaries are pushed to Notion in parallel. The triage push is awaited; the summary push is fire-and-forget.
+
+**Linear + Notion gating:** Only runs for `bug` and `request` labels. Linear uses a 15s timeout.
+
+### `timer.ts`
+
+**Timer processing:** Fires every 5 minutes via scheduled handler. For each fired timer:
+1. Look up latest classification for the chat
+2. Run `handleTriageResult` (always escalates for timer path)
+3. Mark timer as fired + record in `processed_timers`
+
+**Stale chat alerts:** After timer processing, checks for chats with no team response in 4+ hours. Idempotency via `stale_alert_sent` table.
+
+**Daily summaries:** Sent at 16:00 UTC (morning) and 00:00 UTC (evening). Two parallel paths:
+1. `sendDailySummaryWebhook()` — team KPI summary via webhook
+2. `sendDailySummaryIfScheduled()` — approval stats via Bot API
+
+## Debugging
+
+### Quick Diagnostic
 
 ```bash
-npx wrangler tail                          # All logs
-npx wrangler tail --search "chatId: 123"   # Specific chat
-npx wrangler tail --search "error"          # Errors only
-```
+# Check live logs
+bunx wrangler tail --search "error"
 
-### 2. Verify Webhook Delivery
+# Check pipeline metrics
+bunx wrangler d1 execute triage-agent-db --remote --command "
+  SELECT stage, COUNT(*), AVG(durationMs), MAX(durationMs)
+  FROM (SELECT json_extract(source, '$.stage') as stage, json_extract(source, '$.durationMs') as durationMs
+        FROM logs WHERE source LIKE '%pipeline_metric%')
+  GROUP BY stage"
 
-```bash
-curl "https://api.telegram.org/bot<TOKEN>/getWebhookInfo"
-```
-
-### 3. Query D1 Tables
-
-```bash
-# Find a specific message
-npx wrangler d1 execute telegram-agent-db --remote --command "
-  SELECT am.*, c.telegram_chat_id, c.title
-  FROM active_messages am JOIN chats c ON am.chat_id = c.id
-  WHERE am.telegram_message_id = 123456 ORDER BY am.created_at DESC LIMIT 5"
-
-# Check classification
-npx wrangler d1 execute telegram-agent-db --remote --command "
-  SELECT am.telegram_message_id, am.text, c.label, c.confidence, c.method
-  FROM classifications c JOIN active_messages am ON c.message_id = am.id
-  WHERE am.telegram_message_id = 123456"
-
-# Check drafts
-npx wrangler d1 execute telegram-agent-db --remote --command "
-  SELECT d.content, d.confidence, d.status, d.created_at, d.sent_at
-  FROM drafts d JOIN chats c ON d.chat_id = c.id
-  WHERE c.telegram_chat_id = 789012345 ORDER BY d.created_at DESC LIMIT 10"
-
-# Check escalations (last 24h)
-npx wrangler d1 execute telegram-agent-db --remote --command "
-  SELECT e.*, d.content as draft_content
-  FROM escalations e LEFT JOIN drafts d ON e.draft_id = d.id
-  WHERE e.created_at > datetime('now', '-24 hours') ORDER BY e.created_at DESC"
-```
-
-### 4. Verify Pipeline Stages
-
-| Stage | Log to look for | If missing |
-|-------|----------------|------------|
-| Webhook received | `Received Telegram update` | Check webhook URL + secret |
-| Normalized | `Normalized event` | Message may have no text (photo, sticker) |
-| Persisted | — | Check for SQL errors, verify D1 binding |
-| Classified | `Classified by rules` or `Rules inconclusive` | Check `env.AI` binding or API keys |
-| Response handled | `Draft saved` / `Draft escalated` / `Draft auto-sent` | Check `isMention`, `SLACK_WEBHOOK_URL`, `TELEGRAM_BOT_TOKEN` |
-
-### 5. Force Reprocess a Message
-
-Replay the webhook:
-```bash
-curl -X POST "https://your-worker.workers.dev/webhook/telegram" \
-  -H "Content-Type: application/json" \
-  -H "X-Telegram-Bot-Api-Secret-Token: $TELEGRAM_WEBHOOK_SECRET" \
-  -d '{"update_id": 999999, "message": { "message_id": 123, "from": {"id": 456, "is_bot": false, "first_name": "Test"}, "chat": {"id": 789, "type": "group"}, "date": '$(date +%s)', "text": "REPROCESS: original message text" }}'
-```
-
-### 6. Performance Debugging
-
-```bash
-# Check pipeline timing
-npx wrangler d1 execute telegram-agent-db --remote --command "
-  SELECT stage, COUNT(*) as count, AVG(duration_ms) as avg_ms, MAX(duration_ms) as max_ms
-  FROM pipeline_metrics WHERE created_at > datetime('now', '-1 hour') GROUP BY stage"
-
-# Find chats with many messages (slow context)
-npx wrangler d1 execute telegram-agent-db --remote --command "
-  SELECT c.telegram_chat_id, COUNT(am.id) as message_count
-  FROM active_messages am JOIN chats c ON am.chat_id = c.id
-  GROUP BY c.id HAVING message_count > 100"
+# Check triage decisions
+bunx wrangler d1 execute triage-agent-db --remote --command "
+  SELECT label, action, overall_decision, COUNT(*)
+  FROM triage_decisions
+  WHERE created_at > datetime('now', '-24 hours')
+  GROUP BY label, action, overall_decision"
 ```
 
 ### Common Issues
 
 | Issue | Cause | Fix |
 |-------|-------|-----|
-| "Unauthorized" on webhook | Secret mismatch | `wrangler secret put TELEGRAM_WEBHOOK_SECRET`, update Telegram webhook |
-| "Model fallback failed" | AI provider error | Check `wrangler ai models`, switch provider in `src/lib/ai.ts` |
-| Drafts not sending to Slack | Invalid webhook URL | Test with `curl -X POST "$SLACK_WEBHOOK_URL" -d '{"text":"Test"}'` |
-| Linear issues not created | Invalid API key | Test with `curl -X POST https://api.linear.app/graphql -H "Authorization: $LINEAR_API_KEY" -d '{"query":"query { viewer { id } }"}'` |
+| `DatabaseError: Failed to persist draft` | Missing drafts columns | Apply migration 0011 |
+| `No available model for task: triage` | All AI tiers failed | Check `env.AI` binding + `OPENROUTER_API_KEY` |
+| Draft not sent to user | Safety threshold blocked | Check `triage_decisions` for `blocked_by_threshold` |
+| Duplicate Slack escalations | Idempotency window too short | 5-min window in `escalateToSlack` — increase if needed |
+| Timer not firing | `processed_timers` stale data | Old records auto-cleaned after 24h |
 
 ## See Also
 
-- `src/lib/config.ts` — Response policy implementation + app config
-- `src/lib/classifier.ts` — Classification rules
-- `src/lib/drafter.ts` — Draft generation
-- `src/lib/metrics.ts` — Pipeline timing metrics
+- `src/lib/AGENTS.md` — Library module details
+- `src/lib/config.ts` — Config values
+- `src/lib/classifier.ts` — LLM triage implementation
+- `src/lib/drafter.ts` — Draft persistence
+- `src/lib/safety.ts` — Safety evaluation
+- `src/lib/metrics.ts` — Pipeline timing

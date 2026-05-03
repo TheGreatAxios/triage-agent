@@ -1,172 +1,60 @@
 # Sources — Message Source Adapters
 
-The system uses a **source-adapter pattern** to normalize messages from different platforms into a unified `InternalEvent`:
+The system uses a **source-adapter pattern** to normalize messages from different platforms into a unified `InternalEvent`.
 
-```
-┌─────────────┐     ┌──────────────┐     ┌─────────────────┐
-│   Source    │────▶│   Adapter    │────▶│  InternalEvent  │
-│ (Telegram,  │     │ (normalize,  │     │  (universal)    │
-│  Discord,   │     │  verify)     │     │                 │
-│  Email...)  │     │              │     │                 │
-└─────────────┘     └──────────────┘     └─────────────────┘
-```
+## Current State
 
-The core pipeline (`ingest.ts`, `classifier.ts`, `respond.ts`) is source-agnostic. Each source only needs:
-1. An adapter that converts source payloads to `InternalEvent`
-2. A webhook route that uses the adapter
-3. (Optional) A responder for sending messages back to the source
+**Only Telegram is implemented.** The normalizer is in `src/lib/normalizer.ts` (not yet extracted to `src/sources/telegram.ts`). The `types.ts` file defines the adapter interface for future sources.
 
 ## Files
 
 - `types.ts` — `SourceAdapter` interface + `SourceRegistry`
+
+## Adapter Interface
+
+```typescript
+interface SourceAdapter<T> {
+  name: string;
+  normalize(payload: T): InternalEvent | null;
+  verify?(request: Request, secret: string): boolean;
+  resolveEventType(payload: T, isMention: boolean): MessageEventType;
+}
+```
 
 ## Adding a New Source
 
 ### Step 1: Add Source to Type Union
 
 Edit `src/types/events.ts`:
-
 ```typescript
-export type Source = "telegram" | "email" | "slack" | "api" | "discord";
+export type Source = "telegram" | "discord" | "email" | "slack" | "api";
 ```
 
 ### Step 2: Create the Adapter
 
-Create `src/sources/discord.ts` (example):
+Create `src/sources/discord.ts` implementing `SourceAdapter`.
 
-```typescript
-import type { SourceAdapter } from "./types";
-import type { InternalEvent, MessageEventType } from "../types/events";
+### Step 3: Add Webhook Route
 
-interface DiscordMessage {
-  id: string;
-  channel_id: string;
-  author: { id: string; username: string; bot?: boolean };
-  content: string;
-  timestamp: string;
-  mentions: Array<{ id: string }>;
-}
+Edit `src/routes/webhook.ts` — add a new POST handler for the source.
 
-export const discordAdapter: SourceAdapter<DiscordMessage> = {
-  name: "discord",
+### Step 4: Handle Source-Specific Responses
 
-  normalize(payload: DiscordMessage): InternalEvent | null {
-    if (!payload.content) return null;
-    const isMention = payload.mentions.some(m => m.id === process.env.DISCORD_BOT_USER_ID);
-    return {
-      id: parseInt(payload.id),
-      source: "discord",
-      type: this.resolveEventType(payload, isMention),
-      chatId: parseInt(payload.channel_id),
-      messageId: parseInt(payload.id),
-      sender: { id: parseInt(payload.author.id), isBot: payload.author.bot ?? false, name: payload.author.username },
-      text: payload.content,
-      isMention,
-      timestamp: payload.timestamp,
-    };
-  },
+Add a responder in `src/pipeline/respond.ts` if the source supports sending messages back.
 
-  verify(request: Request, secret: string): boolean {
-    const signature = request.headers.get("X-Signature-Ed25519");
-    // ... verification logic
-    return true;
-  },
-
-  resolveEventType(payload: DiscordMessage, isMention: boolean): MessageEventType {
-    if (payload.content.startsWith("!")) return "command";
-    if (isMention) return "mention";
-    return "message";
-  },
-};
-```
-
-### Step 3: Register the Adapter
-
-Edit `src/sources/types.ts`:
-
-```typescript
-sourceRegistry.register(discordAdapter);
-```
-
-### Step 4: Add Webhook Route
-
-Edit `src/routes/webhook.ts`:
-
-```typescript
-webhook.post("/discord", async (c) => {
-  const adapter = sourceRegistry.get("discord");
-  if (!adapter) return c.json({ error: "Adapter not found" }, 500);
-
-  if (adapter.verify) {
-    const isValid = adapter.verify(c.req.raw, c.env.DISCORD_WEBHOOK_SECRET);
-    if (!isValid) return c.json({ error: "Unauthorized" }, 401);
-  }
-
-  const payload = await c.req.json();
-  const event = adapter.normalize(payload);
-  if (!event) return c.json({ ok: true });
-
-  const allowed = await checkRateLimit(c.env.DB, event.chatId);
-  if (!allowed) return c.json({ ok: true });
-
-  c.executionCtx.waitUntil(ingestEvent(c.env, event));
-  return c.json({ ok: true });
-});
-```
-
-### Step 5: Handle Source-Specific Responses
-
-If the source supports sending responses, add a responder and route by source in `src/pipeline/respond.ts`:
-
-```typescript
-async function sendResponseBySource(env: Env, source: Source, chatId: number, text: string): Promise<boolean> {
-  switch (source) {
-    case "telegram": return sendTelegramMessage(env.TELEGRAM_BOT_TOKEN, chatId, text);
-    case "discord":  return discordResponder.send(String(chatId), text);
-    default:
-      logger.warn("No responder for source", { source });
-      return false;
-  }
-}
-```
-
-### Step 6: Add Secrets & Env
+### Step 5: Add Secrets & Env
 
 ```bash
-npx wrangler secret put DISCORD_BOT_TOKEN
-npx wrangler secret put DISCORD_WEBHOOK_SECRET
+bunx wrangler secret put DISCORD_BOT_TOKEN
 ```
 
-Update `src/types/env.ts`:
-```typescript
-DISCORD_BOT_TOKEN?: string;
-DISCORD_WEBHOOK_SECRET?: string;
-```
+Update `src/types/env.ts`.
 
-## Adapter Implementation Checklist
+## ID Mapping
 
-- [ ] Define source-specific payload interface
-- [ ] Implement `normalize()` returning `InternalEvent | null`
-- [ ] Implement `verify()` if source requires webhook verification
-- [ ] Handle ID mapping (source IDs may be strings; `InternalEvent` uses numbers)
-- [ ] Map source "mention" concept to `isMention` boolean
-- [ ] Handle bot detection (set `sender.isBot`)
-- [ ] Parse timestamps to ISO format
-- [ ] Add source to `Source` union type in `src/types/events.ts`
-- [ ] Register adapter in `SourceRegistry`
-- [ ] Add webhook route in `src/routes/webhook.ts`
-- [ ] Add responder if source supports sending messages
-- [ ] Set required secrets
-- [ ] Configure webhook URL with provider
+Some sources (Discord, Slack) use string IDs. The current schema uses `INTEGER` for `telegram_chat_id` and `telegram_message_id`. Options for new sources:
 
-## ID Mapping Patterns
-
-Some sources (Discord, Slack) use string IDs. Options:
-
-1. **Hash to number** (simple, may collide):
-   ```typescript
-   id: payload.id.split('').reduce((a,b) => a + b.charCodeAt(0), 0)
-   ```
+1. **Hash to number** (simple, may collide)
 2. **Store mapping table** (recommended):
    ```sql
    CREATE TABLE source_mappings (
@@ -176,11 +64,20 @@ Some sources (Discord, Slack) use string IDs. Options:
      UNIQUE(source, external_id)
    );
    ```
-3. **Use string IDs throughout** (requires schema change to `InternalEvent.chatId`)
+3. **Use string IDs throughout** (requires schema change)
+
+## Design Decisions
+
+### Why normalizer.ts isn't in sources/
+
+Historical reasons — it was created before the source-adapter pattern was designed. It should be extracted to `src/sources/telegram.ts` when adding a second source. The TODO is in the file.
+
+### Source field in active_messages
+
+Every message has a `source` column (default `'telegram'`). This allows querying by source when multiple adapters exist.
 
 ## See Also
 
-- `src/sources/types.ts` — Adapter interface definition
 - `src/types/events.ts` — `InternalEvent` structure
-- `src/pipeline/ingest.ts` — How events flow through the system
+- `src/lib/normalizer.ts` — Current Telegram normalizer
 - `src/routes/AGENTS.md` — Webhook route setup
