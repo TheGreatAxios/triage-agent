@@ -330,38 +330,43 @@ export async function handleTriageResult(
   });
 
   // ── Linear + Notion (unchanged logic) ────────────────────────────────
-  if (triage.label === "bug" || triage.label === "request") {
+  if (triage.label === "bug" || triage.label === "request" || triage.label === "financial_help") {
     const [chatTitle, recentMessages] = await Promise.all([
       getChatTitle(env.DB, chatId),
       getRecentMessagesForEscalation(env.DB, chatId),
     ]);
 
-    const [linearResult] = await Promise.allSettled([
-      withTimeout(
-        createTriageIssue(
-          env,
-          chatTitle,
-          {
-            label: triage.label,
-            confidence: triage.confidence,
-            reasoning: triage.reasoning,
-          },
-          recentMessages,
-        ).then(async (issue) => {
-          if (issue && dbMessageId) {
-            await persistLinearLink(env.DB, chatId, dbMessageId, issue.issueId, issue.issueUrl);
-          }
-          return issue;
-        }),
-        15000,
-        "linear_triage_issue",
-      ),
-    ]);
+    // Skip Linear for financial_help (no dev tracking needed), but still do Notion
+    const linearPromise = triage.label === "financial_help"
+      ? Promise.resolve(null)
+      : withTimeout(
+          createTriageIssue(
+            env,
+            chatTitle,
+            {
+              label: triage.label,
+              confidence: triage.confidence,
+              reasoning: triage.reasoning,
+            },
+            recentMessages,
+          ).then(async (issue) => {
+            if (issue && dbMessageId) {
+              await persistLinearLink(env.DB, chatId, dbMessageId, issue.issueId, issue.issueUrl);
+            }
+            return issue;
+          }),
+          15000,
+          "linear_triage_issue",
+        );
 
-    if (linearResult.status === "fulfilled") {
-      logger.info("Linear triage issue created", { chatId, issueId: linearResult.value?.issueId });
-    } else {
-      logger.error("Linear triage issue failed", { chatId, error: getErrorMessage(linearResult.reason) });
+    const [linearResult] = await Promise.allSettled([linearPromise]);
+
+    if (triage.label !== "financial_help") {
+      if (linearResult.status === "fulfilled") {
+        logger.info("Linear triage issue created", { chatId, issueId: linearResult.value?.issueId });
+      } else {
+        logger.error("Linear triage issue failed", { chatId, error: getErrorMessage(linearResult.reason) });
+      }
     }
 
     fireAndForget(

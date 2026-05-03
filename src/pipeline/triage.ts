@@ -133,7 +133,7 @@ async function buildContext(db: D1Database, chatId: number, env?: Env): Promise<
 
   const messages = await getRecentMessagesWithSenders(db, {
     chatId,
-    limit: 40,
+    limit: 80,
     order: "desc",
   });
 

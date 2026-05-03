@@ -1,5 +1,5 @@
 /** Classification labels for message triage. */
-export type ClassificationLabel = "bug" | "request" | "normal" | "unknown";
+export type ClassificationLabel = "bug" | "request" | "normal" | "unknown" | "financial_help";
 
 /** Method used to produce the classification. */
 export type ClassificationMethod = "rule" | "model" | "fallback";
