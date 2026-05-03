@@ -389,7 +389,7 @@ export async function handleTriageResult(
 
     fireAndForget(
       async () => {
-        const summary = await getOrRefreshSummary(env.DB, chatId);
+        const summary = await getOrRefreshSummary(env.DB, chatId, env);
         if (summary?.content) {
           const { appended, suggestion } = await pushSummaryToNotion(
             env,

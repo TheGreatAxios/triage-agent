@@ -41,7 +41,7 @@ export async function processTriageMessage(
   try {
     // Build conversation context for the LLM
     const contextStart = Date.now();
-    const context = await buildContext(env.DB, msg.dbChatId);
+    const context = await buildContext(env.DB, msg.dbChatId, env);
     stageTimes.build_context = Date.now() - contextStart;
 
     // Reconstruct a minimal InternalEvent for the classifier
@@ -124,13 +124,16 @@ export async function processTriageMessage(
 
 /**
  * Build conversation context string for the triage LLM.
+ *
+ * Uses a large recent-message window (40 messages) plus an AI-generated
+ * conversation summary to give the LLM rich historical context.
  */
-async function buildContext(db: D1Database, chatId: number): Promise<string> {
-  const summary = await getOrRefreshSummary(db, chatId);
+async function buildContext(db: D1Database, chatId: number, env?: Env): Promise<string> {
+  const summary = await getOrRefreshSummary(db, chatId, env);
 
   const messages = await getRecentMessagesWithSenders(db, {
     chatId,
-    limit: 10,
+    limit: 40,
     order: "desc",
   });
 
