@@ -27,69 +27,11 @@ import {
   SafetyResult,
 } from "../lib/safety";
 
-// ── Confidence Thresholds ────────────────────────────────────────────────
-// These guardrails prevent the system from sending low-confidence AI output
-// to users. All thresholds are enforced AFTER the LLM decides, so the prompt
-// can suggest but the code enforces.
-
-/** Minimum classification confidence to send any draft to the user. */
-const CLASSIFICATION_THRESHOLD = 0.4;
-
-/** Minimum draft/response confidence to send a draft to the user. */
-const DRAFT_CONFIDENCE_THRESHOLD = 0.6;
-
-/** Label types that require special handling. */
-const SENSITIVE_LABELS: ClassificationLabel[] = ["bug", "request"];
-
 /**
- * Evaluate whether a triage result passes safety and confidence checks.
+ * Act on a triage result: save draft, escalate to Slack, create Linear issues.
  *
- * Returns a decision that overrides the LLM's action if thresholds aren't met:
- * - "pass" — send as the LLM intended
- * - "blocked_by_threshold" — confidence too low, escalate instead
- * - "blocked_by_content_filter" — unsafe content detected, escalate instead
- * - "no_draft" — no draft content to send
- */
-function evaluateSafety(
-  triage: TriageResult,
-  safety: SafetyResult,
-): { pass: boolean; overriddenAction: TriageResult["action"] | null; reason: string } {
-  // 1. No draft content → can't send anything
-  if (!triage.draft) {
-    return { pass: false, overriddenAction: null, reason: "no_draft" };
-  }
-
-  // 2. Content safety check — flag unsafe output before it reaches the user
-  if (safety.action === "blocked") {
-    return { pass: false, overriddenAction: "escalate", reason: "blocked_by_content_filter" };
-  }
-
-  // 3. Classification confidence too low
-  if (triage.confidence < CLASSIFICATION_THRESHOLD) {
-    return { pass: false, overriddenAction: "escalate", reason: "blocked_by_threshold" };
-  }
-
-  // 4. Draft confidence below threshold — even if LLM said auto_send, don't trust it
-  const draftConfidence = triage.draftConfidence ?? 0;
-  if (draftConfidence < DRAFT_CONFIDENCE_THRESHOLD) {
-    return { pass: false, overriddenAction: "escalate", reason: "blocked_by_threshold" };
-  }
-
-  // 5. For sensitive labels (bug/request), require higher draft confidence
-  const isSensitive = SENSITIVE_LABELS.includes(triage.label as ClassificationLabel);
-  if (isSensitive && draftConfidence < 0.8) {
-    return { pass: false, overriddenAction: "escalate", reason: "blocked_by_threshold" };
-  }
-
-  // Passed all checks
-  return { pass: true, overriddenAction: null, reason: "pass" };
-}
-
-/**
- * Act on a triage result: auto_send, escalate, draft_only, or defer.
- *
- * All drafts are validated against safety and confidence thresholds before
- * reaching the user. Every decision is logged to the triage_decisions audit table.
+ * Telegram responses are paused for quality rework.
+ * No messages are sent to users — all drafts are saved or escalated to Slack.
  */
 export async function handleTriageResult(
   env: Env,
@@ -101,29 +43,23 @@ export async function handleTriageResult(
   const draftContent = triage.draft;
   const draftConfidence = triage.draftConfidence ?? 0;
 
-  // ── Safety & threshold validation ────────────────────────────────────
-  const safety = draftContent ? checkContentSafety(draftContent) : { flagged: false, categories: [], scores: {}, action: "pass" as const };
-  const thresholdEval = evaluateSafety(triage, safety);
+  // ── Safety check ─────────────────────────────────────────────────────
+  const safety = draftContent
+    ? checkContentSafety(draftContent)
+    : { flagged: false, categories: [], scores: {}, action: "pass" as const };
 
-  const classificationThresholdPassed = triage.confidence >= CLASSIFICATION_THRESHOLD;
-  const draftThresholdPassed = thresholdEval.pass;
+  if (draftContent) {
+    await persistContentSafetyLog(env.DB, chatId, safety, draftContent);
+  }
 
-  // Log safety check result
-  await persistContentSafetyLog(env.DB, chatId, safety, draftContent ?? "");
-
-  // Determine effective action (LLM action vs safety override)
-  const effectiveAction = thresholdEval.overriddenAction ?? triage.action;
-  const overallDecision = getOverallDecision(triage, thresholdEval, safety);
-  const safetyCategories = safety.flagged ? safety.categories : [];
-
-  // ── Act on the effective action ──────────────────────────────────────
-  switch (effectiveAction) {
-    case "auto_send":
-    case "draft_only": {
-      // auto_send is deprecated — Telegram responses are paused for quality rework.
-      // Both auto_send and draft_only now just persist the draft, never send.
+  // ── Save or escalate ─────────────────────────────────────────────────
+  switch (triage.action) {
+    case "draft_only":
+    case "auto_send": {
+      // auto_send is deprecated — both just save the draft for later review.
+      // auto_send is handled here as a safety net for old schema output.
       if (!draftContent) {
-        logger.warn("draft_only with no draft — skipping", { chatId });
+        logger.warn("No draft to save — skipping", { chatId });
         break;
       }
 
@@ -145,11 +81,11 @@ export async function handleTriageResult(
         ).bind(draftId).run();
       }
 
-      logger.info("Draft saved for review (Telegram responses paused)", {
+      logger.info("Draft saved for review", {
         chatId,
         draftId,
-        classificationConfidence: triage.confidence,
-        responseConfidence: triage.draftConfidence,
+        label: triage.label,
+        confidence: triage.confidence,
       });
       break;
     }
@@ -169,28 +105,17 @@ export async function handleTriageResult(
           )
         : null;
 
-      // Mark content safety flags on the draft
       if (draftId && safety.flagged) {
         await env.DB.prepare(
           "UPDATE drafts SET content_filtered = 1 WHERE id = ?"
         ).bind(draftId).run();
       }
 
-      // Telegram responses are paused — never send draft to user. Only escalate to Slack.
-      logger.info("Draft blocked from user — escalating to Slack only (Telegram responses paused)", {
-        chatId,
-        draftId,
-        reason: thresholdEval.reason,
-        classificationConfidence: triage.confidence,
-        draftConfidence,
-      });
-
       const [chatTitle, recentMessages] = await Promise.all([
         getChatTitle(env.DB, chatId),
         getRecentMessagesForEscalation(env.DB, chatId),
       ]);
 
-      // Timeout Slack escalation at 10s to prevent waitUntil overrun
       const result = await withTimeout(
         escalateToSlack(env.DB, env.SLACK_WEBHOOK_URL, {
           chatId,
@@ -203,7 +128,7 @@ export async function handleTriageResult(
             method: triage.method,
             reasoning: triage.reasoning,
           },
-          reason: buildEscalationReason(triage, thresholdEval),
+          reason: triage.reasoning,
           recentMessages,
           responseConfidence: triage.draftConfidence ?? undefined,
         }),
@@ -212,8 +137,8 @@ export async function handleTriageResult(
       );
 
       if (result.delivered) {
-        logger.info("Draft escalated to Slack", {
-          chatId, draftId, responseConfidence: triage.draftConfidence,
+        logger.info("Escalated to Slack", {
+          chatId, draftId, label: triage.label,
         });
       } else {
         logger.error("Slack escalation delivery failed", {
@@ -224,7 +149,7 @@ export async function handleTriageResult(
     }
 
     case "defer": {
-      logger.debug("Deferred — no action needed", {
+      logger.debug("Deferred — no action", {
         chatId,
         label: triage.label,
         confidence: triage.confidence,
@@ -243,22 +168,21 @@ export async function handleTriageResult(
     action: triage.action,
     draftContent,
     draftConfidence: triage.draftConfidence ?? null,
-    classificationThresholdPassed,
-    draftThresholdPassed,
-    overallDecision,
+    classificationThresholdPassed: true, // Deprecated — kept for schema compat
+    draftThresholdPassed: true,           // Deprecated — kept for schema compat
+    overallDecision: getOverallDecision(triage, safety),
     contentFlagged: safety.flagged,
-    contentSafetyCategories: safetyCategories,
+    contentSafetyCategories: safety.flagged ? safety.categories : [],
     executionTimeMs: Date.now() - startTime,
   });
 
-  // ── Linear + Notion (unchanged logic) ────────────────────────────────
+  // ── Linear + Notion ──────────────────────────────────────────────────
   if (triage.label === "bug" || triage.label === "request" || triage.label === "financial_help") {
     const [chatTitle, recentMessages] = await Promise.all([
       getChatTitle(env.DB, chatId),
       getRecentMessagesForEscalation(env.DB, chatId),
     ]);
 
-    // Skip Linear for financial_help (no dev tracking needed), but still do Notion
     const linearPromise = triage.label === "financial_help"
       ? Promise.resolve(null)
       : withTimeout(
@@ -349,7 +273,6 @@ export async function handleTriageResult(
  */
 function getOverallDecision(
   triage: TriageResult,
-  thresholdEval: { pass: boolean; reason: string },
   safety: SafetyResult,
 ): string {
   if (!triage.draft) {
@@ -358,38 +281,17 @@ function getOverallDecision(
   if (safety.action === "blocked") {
     return "blocked_by_content_filter";
   }
-  if (!thresholdEval.pass) {
-    return "blocked_by_threshold";
+  if (triage.action === "draft_only" || triage.action === "auto_send") {
+    return "saved";
   }
-  if (triage.action === "auto_send" || triage.action === "escalate") {
-    return "sent";
+  if (triage.action === "escalate") {
+    return "escalated";
   }
   return "deferred";
 }
 
 /**
- * Build an escalation reason string that includes threshold info for human reviewers.
- */
-function buildEscalationReason(
-  triage: TriageResult,
-  thresholdEval: { pass: boolean; reason: string },
-): string {
-  const parts: string[] = [triage.reasoning];
-
-  if (!thresholdEval.pass) {
-    parts.push(
-      `\n\n[Threshold gate: ${thresholdEval.reason}] ` +
-      `Classification confidence: ${(triage.confidence * 100).toFixed(0)}%, ` +
-      `Draft confidence: ${((triage.draftConfidence ?? 0) * 100).toFixed(0)}%`
-    );
-  }
-
-  return parts.join("");
-}
-
-/**
  * Send a Slack message suggesting a project link for a triage page.
- * Approver can confirm the match or create a new project.
  */
 async function sendProjectSuggestionToSlack(
   env: Env,
