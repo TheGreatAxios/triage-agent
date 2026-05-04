@@ -3,11 +3,13 @@ import { z } from "zod";
 import type { InternalEvent } from "../types/events";
 import type { ClassificationLabel, TriageResult } from "../types/classification";
 import type { Env } from "../types/env";
+import type { DraftContext } from "./context-builder";
 import { getTaskTiers, resolveModel } from "./ai";
 import { logger } from "./logger";
 import { AIError, getErrorMessage } from "./errors";
 import { sanitizePromptInput, sanitizeContextInput } from "./sanitize";
 import { withTimeout } from "./timeout";
+
 
 // ── Schemas ──────────────────────────────────────────────────────────────
 
@@ -187,19 +189,28 @@ export async function classifyMessage(
  * Generate a draft response for a classified message.
  *
  * Only called when action is draft_only or escalate.
- * Separated from classification so each task has a clean, focused prompt.
+ * Uses rich DraftContext with metadata for higher quality responses.
  */
 export async function draftResponse(
   env: Env,
   event: InternalEvent,
-  context: string,
+  context: DraftContext,
   classification: { label: string; reasoning: string },
 ): Promise<{ draft: string; draftConfidence: number }> {
-  const sanitizedContext = sanitizeContextInput(context);
+  const sanitizedContext = sanitizeContextInput(context.formatted);
   const sanitizedText = sanitizePromptInput(event.text);
   const communityName = env.COMMUNITY_NAME || "this community";
   const docsUrl = env.DOCS_URL || "the docs";
   const systemPrompt = buildDraftPrompt(communityName, docsUrl);
+
+  // Context.formatted already contains rich metadata from buildDraftContext
+  // Just append the classification info and task
+  const enhancedPrompt = `${sanitizedContext}
+
+Classification: ${classification.label}
+Reasoning: ${classification.reasoning}
+
+Write the reply:`;
 
   const tiers = getTaskTiers("draft");
   let lastError: unknown;
@@ -222,7 +233,7 @@ export async function draftResponse(
         generateText({
           model,
           system: systemPrompt,
-          prompt: `Context:\n${sanitizedContext}\n\nUser message:\n${sanitizedText}\n\nClassification: ${classification.label}\nReasoning: ${classification.reasoning}\n\nWrite the reply:`,
+          prompt: enhancedPrompt,
           maxOutputTokens: 300,
         }),
         15000,
@@ -270,70 +281,4 @@ export async function draftResponse(
   );
 }
 
-// ── Triage Pipeline (orchestrates classify + draft) ──────────────────────
 
-/**
- * Single-call triage: classify a message, then draft if needed.
- *
- * Two-step process:
- * 1. Classify (generateObject with schema)
- * 2. Draft if action is draft_only or escalate (generateText)
- *
- * This keeps each prompt clean and focused on one task.
- */
-export async function triageMessage(
-  env: Env,
-  event: InternalEvent,
-  context: string,
-): Promise<TriageResult> {
-  const classification = await classifyMessage(env, event, context);
-
-  // If defer, no draft needed
-  if (classification.action === "defer") {
-    return {
-      label: classification.label,
-      confidence: classification.confidence,
-      method: "model",
-      reasoning: classification.reasoning,
-      action: "defer",
-      draft: null,
-      draftConfidence: null,
-    };
-  }
-
-  // Generate draft for draft_only or escalate
-  try {
-    const draftResult = await draftResponse(env, event, context, {
-      label: classification.label,
-      reasoning: classification.reasoning,
-    });
-
-    return {
-      label: classification.label,
-      confidence: classification.confidence,
-      method: "model",
-      reasoning: classification.reasoning,
-      action: classification.action,
-      draft: draftResult.draft,
-      draftConfidence: draftResult.draftConfidence,
-    };
-  } catch (err) {
-    // Draft failed — still return classification, just without a draft.
-    // Action becomes escalate so the human gets notified in Slack.
-    logger.error("Draft generation failed, escalating without draft", {
-      messageId: event.messageId,
-      chatId: event.chatId,
-      error: getErrorMessage(err),
-    });
-
-    return {
-      label: classification.label,
-      confidence: classification.confidence,
-      method: "model",
-      reasoning: `${classification.reasoning}\n[Draft generation failed: ${getErrorMessage(err)}]`,
-      action: "escalate",
-      draft: null,
-      draftConfidence: null,
-    };
-  }
-}

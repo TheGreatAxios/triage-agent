@@ -1,14 +1,20 @@
 import type { InternalEvent } from "../types/events";
 import type { Env } from "../types/env";
-import { triageMessage } from "../lib/classifier";
+import type { TriageResult } from "../types/classification";
+import { classifyMessage, draftResponse } from "../lib/classifier";
 import { persistClassification } from "../lib/persistence";
 import { handleTriageResult } from "./respond";
 import { trackPipelineMetrics } from "../lib/metrics";
 import { logger } from "../lib/logger";
 import { getErrorMessage } from "../lib/errors";
 import { getOrRefreshSummary } from "../lib/summary";
-import { getRecentMessagesWithSenders, buildMessageContext } from "../lib/queries";
+import { getRecentMessagesWithSenders } from "../lib/queries";
 import { sendErrorAlert } from "../lib/escalation";
+import {
+  buildClassificationContext,
+  buildDraftContext,
+  type DraftContext,
+} from "../lib/context-builder";
 
 /** Internal message passed from ingest to triage. */
 interface TriageMessage {
@@ -39,9 +45,18 @@ export async function processTriageMessage(
   const stageTimes: Record<string, number> = {};
 
   try {
-    // Build conversation context for the LLM
+    // Build conversation context for classification (Tier 1: 30 messages)
     const contextStart = Date.now();
-    const context = await buildContext(env.DB, msg.dbChatId, env);
+    const classificationCtx = await buildClassificationContext(
+      env.DB,
+      msg.dbChatId,
+      msg.sender.id,
+      async (chatId) => {
+        const summary = await getOrRefreshSummary(env.DB, chatId, env);
+        return summary?.content ?? null;
+      },
+      getRecentMessagesWithSenders,
+    );
     stageTimes.build_context = Date.now() - contextStart;
 
     // Reconstruct a minimal InternalEvent for the classifier
@@ -62,9 +77,77 @@ export async function processTriageMessage(
       timestamp: msg.timestamp,
     };
 
-    const triage = await triageMessage(env, event, context);
+    // Step 1: Classify only (no draft yet)
+    const classification = await classifyMessage(env, event, classificationCtx.formatted);
 
-    // Persist classification for analytics / timer lookups
+    // Step 2: Build rich draft context and generate draft if needed
+    let triage: TriageResult;
+    if (classification.action === "defer") {
+      triage = {
+        label: classification.label,
+        confidence: classification.confidence,
+        method: "model",
+        reasoning: classification.reasoning,
+        action: "defer",
+        draft: null,
+        draftConfidence: null,
+      };
+    } else {
+      // Build rich draft context (Tier 2: 5-7 messages + metadata)
+      const draftStart = Date.now();
+      const draftCtx = await buildDraftContext(
+        env.DB,
+        msg.dbChatId,
+        msg.sender.id,
+        { text: msg.text, senderName: msg.sender.name, senderId: msg.sender.id },
+        async (chatId) => {
+          const summary = await getOrRefreshSummary(env.DB, chatId, env);
+          return summary?.content ?? null;
+        },
+        getRecentMessagesWithSenders,
+      );
+      stageTimes.build_draft_context = Date.now() - draftStart;
+
+      // Generate draft with rich context
+      const draftGenStart = Date.now();
+      try {
+        const draftResult = await draftResponse(env, event, draftCtx, {
+          label: classification.label,
+          reasoning: classification.reasoning,
+        });
+        stageTimes.draft_generation = Date.now() - draftGenStart;
+
+        triage = {
+          label: classification.label,
+          confidence: classification.confidence,
+          method: "model",
+          reasoning: classification.reasoning,
+          action: classification.action,
+          draft: draftResult.draft,
+          draftConfidence: draftResult.draftConfidence,
+        };
+      } catch (err) {
+        // Draft failed — escalate without draft
+        logger.error("Draft generation failed, escalating without draft", {
+          messageId: msg.messageId,
+          chatId: msg.dbChatId,
+          error: getErrorMessage(err),
+        });
+        stageTimes.draft_generation = Date.now() - draftGenStart;
+
+        triage = {
+          label: classification.label,
+          confidence: classification.confidence,
+          method: "model",
+          reasoning: `${classification.reasoning}\n[Draft generation failed: ${getErrorMessage(err)}]`,
+          action: "escalate",
+          draft: null,
+          draftConfidence: null,
+        };
+      }
+    }
+
+    // Persist classification once (after all processing is done)
     await persistClassification(env.DB, msg.dbMessageId, msg.dbChatId, {
       label: triage.label,
       confidence: triage.confidence,
@@ -72,7 +155,11 @@ export async function processTriageMessage(
       reasoning: triage.reasoning,
     });
 
-    stageTimes.llm_triage = Date.now() - triageStart - stageTimes.build_context;
+    // Calculate timing: LLM work = everything except build_context and handle_result
+    stageTimes.llm_triage = Date.now() - triageStart
+      - stageTimes.build_context
+      - (stageTimes.build_draft_context || 0)
+      - (stageTimes.draft_generation || 0);
     trackPipelineMetrics({ chatId: msg.telegramChatId, stage: "triage", durationMs: Date.now() - triageStart, success: true });
 
     // Act on the result
@@ -123,27 +210,26 @@ export async function processTriageMessage(
 }
 
 /**
- * Build conversation context string for the triage LLM.
+ * Build rich draft context when needed (for draft_only or escalate actions).
  *
- * Uses a large recent-message window (40 messages) plus an AI-generated
- * conversation summary to give the LLM rich historical context.
+ * This creates a focused, metadata-rich context for draft generation.
+ * Called within handleTriageResult when a draft is needed.
  */
-async function buildContext(db: D1Database, chatId: number, env?: Env): Promise<string> {
-  const summary = await getOrRefreshSummary(db, chatId, env);
-
-  const messages = await getRecentMessagesWithSenders(db, {
-    chatId,
-    limit: 80,
-    order: "desc",
-  });
-
-  const recentMessages = buildMessageContext(messages.reverse());
-
-  let context = "";
-  if (summary) {
-    context += `Summary:\n${summary.content}\n\n`;
-  }
-  context += `Recent messages:\n${recentMessages}`;
-
-  return context;
+export async function buildRichDraftContext(
+  env: Env,
+  dbChatId: number,
+  senderId: number,
+  targetMessage: { text: string; senderName: string; senderId: number },
+): Promise<DraftContext> {
+  return buildDraftContext(
+    env.DB,
+    dbChatId,
+    senderId,
+    targetMessage,
+    async (chatId) => {
+      const summary = await getOrRefreshSummary(env.DB, chatId, env);
+      return summary?.content ?? null;
+    },
+    getRecentMessagesWithSenders,
+  );
 }
