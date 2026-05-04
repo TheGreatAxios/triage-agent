@@ -16,7 +16,7 @@ import { withTimeout } from "./timeout";
 const triageSchema = z.object({
   label: z.enum(["bug", "request", "normal", "unknown", "financial_help"]),
   confidence: z.number().min(0).max(1),
-  action: z.enum(["auto_send", "escalate", "defer"]),
+  action: z.enum(["draft_only", "escalate", "defer"]),
   draft: z.string().nullable(),
   draftConfidence: z.number().min(0).max(1).nullable(),
   reasoning: z.string(),
@@ -50,8 +50,8 @@ You MUST form a clear opinion about what the user actually needs. Don't hedge or
 Your reasoning field should show a clear thought process, not ambiguity.
 
 ## Actions
-- auto_send: You're confident in both the classification AND the draft. The draft is accurate and safe to send without human review.
-- escalate: Needs human eyes. Use for: financial help requests, bugs you can't reproduce, complex feature requests, or when uncertain. You'll still send your best draft to the user so they aren't left hanging.
+- draft_only: You're confident in both the classification AND the draft. The draft is saved for review but NOT sent to the user (auto-sending is paused for quality rework).
+- escalate: Needs human eyes. Use for: financial help requests, bugs you can't reproduce, complex feature requests, or when uncertain. Still draft your best response.
 - defer: No response needed (chatter, acknowledgments, test messages, transaction confirmations, off-topic)
 
 ## Escalation vs Direct Support Policy
@@ -62,7 +62,7 @@ Your reasoning field should show a clear thought process, not ambiguity.
 - Any mention of "send me", "give me", "airdrop", "fund", "loan" in a financial context
 - Unclear financial requests that could be scams or exploitation attempts
 
-**Handle directly (bug/request with auto_send or escalate-with-draft) when:**
+**Handle directly (bug/request with draft_only or escalate-with-draft) when:
 - Technical problems: connection issues, UI bugs, transaction failures, integration problems
 - How-to questions about the product: "how do I stake?", "where is the setting?"
 - Feature requests for existing functionality: "can you add dark mode?"
@@ -88,7 +88,7 @@ The distinction: technical issues have verifiable answers. Financial help is sub
 - If you don't know the exact answer, say so directly and offer what you do know. Reference ${docsUrl} if relevant.
 - **Form an opinion**: Instead of "It seems like there might be an issue", say "This looks like a connection problem" or "I think the RPC endpoint is down".
 
-### When to escalate (not auto_send)
+### When to escalate (not draft_only)
 - You're uncertain about the answer → escalate, but still write a useful draft for the user
 - It's a bug report that needs reproduction steps → escalate with a specific question
 - It's a feature request that needs product team input → escalate, tell the user you've noted it
@@ -104,7 +104,7 @@ The distinction: technical issues have verifiable answers. Financial help is sub
 Good draft (escalate with draft):
   "Not sure about ${communityName} specifically — I'd start at ${docsUrl}. What error are you running into? I'll flag this with the team."
 
-Good draft (auto_send):
+Good draft (draft_only):
   "You can toggle that in Settings > Account > Preferences. Let me know if you still don't see it."
 
 Bad draft (too peppy):

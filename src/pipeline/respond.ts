@@ -1,13 +1,11 @@
 import type { TriageResult, ClassificationLabel } from "../types/classification";
 import type { Env } from "../types/env";
 import type { DraftStatus } from "../types/draft";
-import { persistDraft, markDraftSent, sendTelegramMessage } from "../lib/drafter";
+import { persistDraft } from "../lib/drafter";
 import {
   escalateToSlack,
-  sendErrorAlert,
   getRecentMessagesForEscalation,
   getChatTitle,
-  getTelegramChatId,
 } from "../lib/escalation";
 import { createTriageIssue, persistLinearLink } from "../lib/linear";
 import {
@@ -120,32 +118,12 @@ export async function handleTriageResult(
 
   // ── Act on the effective action ──────────────────────────────────────
   switch (effectiveAction) {
-    case "auto_send": {
+    case "auto_send":
+    case "draft_only": {
+      // auto_send is deprecated — Telegram responses are paused for quality rework.
+      // Both auto_send and draft_only now just persist the draft, never send.
       if (!draftContent) {
-        logger.warn("auto_send with no draft — skipping", { chatId });
-        break;
-      }
-
-      const telegramChatId = await getTelegramChatId(env.DB, chatId);
-      if (!telegramChatId) {
-        logger.error("Cannot auto-send: Telegram chat ID not found", { chatId });
-        sendErrorAlert(
-          env.DB,
-          env.SLACK_WEBHOOK_URL,
-          {
-            chatId,
-            errorType: "NotFoundError",
-            errorMessage: "Cannot auto-send: Telegram chat ID not found for this internal chat. The draft was never sent.",
-            messageText: triage.reasoning,
-            sender: "system",
-            draftContent: draftContent,
-          },
-        ).catch((escalateErr) => {
-          logger.error("Failed to escalate auto-send failure to Slack", {
-            chatId,
-            error: getErrorMessage(escalateErr),
-          });
-        });
+        logger.warn("draft_only with no draft — skipping", { chatId });
         break;
       }
 
@@ -161,23 +139,18 @@ export async function handleTriageResult(
         },
       );
 
-      // Mark content safety flags on the draft
       if (safety.flagged) {
         await env.DB.prepare(
           "UPDATE drafts SET content_filtered = 1 WHERE id = ?"
         ).bind(draftId).run();
       }
 
-      const sent = await sendTelegramMessage(
-        env.TELEGRAM_BOT_TOKEN, telegramChatId, draftContent,
-      );
-
-      if (sent) {
-        await markDraftSent(env.DB, draftId);
-        logger.info("Draft auto-sent", { chatId, draftId });
-      } else {
-        logger.error("Auto-send failed, draft preserved as pending", { chatId, draftId });
-      }
+      logger.info("Draft saved for review (Telegram responses paused)", {
+        chatId,
+        draftId,
+        classificationConfidence: triage.confidence,
+        responseConfidence: triage.draftConfidence,
+      });
       break;
     }
 
@@ -203,33 +176,14 @@ export async function handleTriageResult(
         ).bind(draftId).run();
       }
 
-      // Only send the draft to Telegram if it passed safety and thresholds.
-      // If it was blocked, don't send to user — just escalate to Slack.
-      const sendToUser = draftContent && thresholdEval.pass;
-
-      if (sendToUser) {
-        const telegramChatId = await getTelegramChatId(env.DB, chatId);
-        if (telegramChatId) {
-          const sent = await sendTelegramMessage(
-            env.TELEGRAM_BOT_TOKEN, telegramChatId, draftContent,
-          );
-          if (sent) {
-            logger.info("Draft sent to user during escalation", { chatId, draftId });
-          } else {
-            logger.error("Failed to send draft to user during escalation", { chatId, draftId });
-          }
-        } else {
-          logger.error("Cannot send escalate draft: Telegram chat ID not found", { chatId });
-        }
-      } else {
-        logger.info("Draft blocked from user — escalating to Slack only", {
-          chatId,
-          draftId,
-          reason: thresholdEval.reason,
-          classificationConfidence: triage.confidence,
-          draftConfidence,
-        });
-      }
+      // Telegram responses are paused — never send draft to user. Only escalate to Slack.
+      logger.info("Draft blocked from user — escalating to Slack only (Telegram responses paused)", {
+        chatId,
+        draftId,
+        reason: thresholdEval.reason,
+        classificationConfidence: triage.confidence,
+        draftConfidence,
+      });
 
       const [chatTitle, recentMessages] = await Promise.all([
         getChatTitle(env.DB, chatId),
@@ -266,38 +220,6 @@ export async function handleTriageResult(
           chatId, draftId, escalationId: result.escalationId,
         });
       }
-      break;
-    }
-
-    case "draft_only": {
-      if (!draftContent) {
-        logger.warn("draft_only with no draft — skipping", { chatId });
-        break;
-      }
-
-      const draftId = await persistDraft(
-        env.DB, chatId, draftContent,
-        triage.confidence, draftConfidence, "pending",
-        undefined, undefined,
-        {
-          classificationLabel: triage.label,
-          classificationConfidence: triage.confidence,
-          reasoning: triage.reasoning,
-          method: triage.method,
-        },
-      );
-
-      if (safety.flagged) {
-        await env.DB.prepare(
-          "UPDATE drafts SET content_filtered = 1 WHERE id = ?"
-        ).bind(draftId).run();
-      }
-
-      logger.info("Draft saved for review", {
-        chatId,
-        classificationConfidence: triage.confidence,
-        responseConfidence: triage.draftConfidence,
-      });
       break;
     }
 
